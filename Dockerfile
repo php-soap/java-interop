@@ -3,6 +3,12 @@
 # stays in the seconds range. See README.md for the two-step build.
 FROM eclipse-temurin:17-jre
 
+# curl backs the compose healthcheck (`GET /health`); install it explicitly so the probe does not
+# depend on whatever the base image happens to ship.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY oracle/target/java-interop-oracle.jar /app/oracle.jar
 
 # Keystores are mounted at runtime: `docker run -v "$PWD/certs:/certs" ...`

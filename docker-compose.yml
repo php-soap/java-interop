@@ -1,0 +1,40 @@
+# Docker-only interop runner. Two services on the default compose network: the WSS4J `oracle` and the
+# `php` PHPUnit runner. `php` reaches the oracle by its service name (http://oracle:8080) over that
+# network — no host.docker.internal, no published port needed for the tests.
+#
+# Driven by the Makefile (`make interop`). The oracle jar must be built first (`make jar`) because the
+# oracle image just copies oracle/target/java-interop-oracle.jar.
+services:
+  oracle:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: java-interop-oracle
+    volumes:
+      - ./certs:/certs
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+
+  php:
+    build:
+      context: .
+      dockerfile: tests/php.Dockerfile
+    image: java-interop-php
+    working_dir: /work/java-interop
+    # Mount the PARENT php-soap dir so the composer path repos (../http-wsse-middleware,
+    # ../psr18-attachments-middleware) resolve from inside the container.
+    volumes:
+      - ..:/work
+    environment:
+      # Service-name networking on the compose network — the php container resolves `oracle`.
+      INTEROP_URL: http://oracle:8080
+      INTEROP_CERTS: /work/java-interop/certs
+    depends_on:
+      oracle:
+        condition: service_healthy

@@ -99,38 +99,45 @@ docker build -t java-interop-oracle .
 
 ## Run locally
 
-```bash
-bash certs/generate.sh
-docker run -d --name oracle -p 8080:8080 -v "$PWD/certs:/certs" java-interop-oracle
-curl -s http://127.0.0.1:8080/health           # -> ok
-
-composer install
-vendor/bin/phpunit --testsuite wsse
-vendor/bin/phpunit --testsuite attachments
-
-docker rm -f oracle
-```
-
-The PHPUnit tests need PHP 8.4 with `dom`, `openssl`, `intl`, `gmp`, `bcmath`. XML canonicalisation is
-libxml-version sensitive; if a signature digest mismatches on an older host PHP, run PHPUnit inside a
-clean PHP 8.4 image and point it at the host oracle:
+One command, Docker-only:
 
 ```bash
-docker run --rm -v "$PWD:/ji" -w /ji \
-  -e INTEROP_URL=http://host.docker.internal:8080 \
-  -e INTEROP_CERTS=/ji/certs \
-  --add-host=host.docker.internal:host-gateway \
-  <php84-image> vendor/bin/phpunit --testsuite wsse
+make interop                 # full suite (wsse + attachments)
+make interop SUITE=wsse      # one testsuite: wsse | attachments
 ```
 
-A working `<php84-image>` is the official `php:8.4-cli` (8.4.22 at time of writing, past the libxml C14N
-quirk) with `intl gmp bcmath` installed and composer copied in:
+The **only prerequisite is Docker** — no host PHP, Java or Maven. `make interop` builds the oracle jar
+(via the maven docker image, `~/.m2` cached), builds the two images, (re)generates the certs, starts the
+oracle and waits until it is healthy, runs PHPUnit in the PHP container, and always tears everything
+down at the end (even when a test fails).
 
-```dockerfile
-FROM php:8.4-cli
-RUN apt-get update && apt-get install -y libicu-dev libgmp-dev libxml2-dev unzip git \
- && docker-php-ext-install intl gmp bcmath && rm -rf /var/lib/apt/lists/*
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+Running everything in containers also avoids host-libxml differences: XML canonicalisation is
+libxml-version sensitive, and the PHP runner image is a recent `php:8.4-cli` (past the older host
+8.4.13 libxml C14N quirk).
+
+### Compose model
+
+`docker-compose.yml` defines two services on the default compose network:
+
+- `oracle` — the WSS4J reference server (built from `Dockerfile`, certs mounted at `/certs`, a
+  `/health` healthcheck).
+- `php` — the PHPUnit runner (built from `tests/php.Dockerfile`). It mounts the **parent** `php-soap`
+  directory at `/work` so the composer path repos (`../http-wsse-middleware`,
+  `../psr18-attachments-middleware`) resolve, and reaches the oracle by **service name**
+  (`INTEROP_URL=http://oracle:8080`) over the compose network — no `host.docker.internal`, no published
+  port required for the tests.
+
+### Individual targets
+
+```bash
+make help     # list targets
+make jar      # build oracle/target/java-interop-oracle.jar (maven docker image, ~/.m2 cached)
+make certs    # (re)generate the shared cert material
+make images   # build the oracle + php docker images
+make up       # start the oracle and wait until healthy
+make test [SUITE=wsse|attachments]   # run PHPUnit in the php container
+make down     # stop everything and remove the compose volumes
+make clean    # remove the built jar and compose volumes
 ```
 
 ## Running against a PR branch
