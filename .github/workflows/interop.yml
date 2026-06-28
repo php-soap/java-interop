@@ -1,0 +1,141 @@
+name: interop
+
+# Reusable cross-stack interop workflow. A consumer middleware repo calls this from its own PR CI to
+# run the php-soap interop suite (PHP middleware <-> Dockerised WSS4J oracle) against the EXACT PR commit
+# under review. The override is the same composer path-repository mechanism used for local dev: the
+# harness's path repo is simply repointed at the PR checkout, so local and PR runs share one code path.
+on:
+  workflow_call:
+    inputs:
+      package:
+        description: 'Composer package name of the consumer middleware (e.g. php-soap/psr18-wsse-middleware).'
+        required: true
+        type: string
+      suites:
+        description: 'PHPUnit testsuite(s) to run (e.g. wsse or attachments).'
+        required: false
+        type: string
+        default: 'wsse'
+
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+    steps:
+      # The interop harness (this repo): oracle, Dockerfile, certs, tests, harness composer.json. Its
+      # composer.json declares path repos to ../<sibling-middleware>; we lay the checkouts out to match.
+      - name: Checkout interop harness
+        uses: actions/checkout@v4
+        with:
+          repository: php-soap/java-interop
+          path: harness
+
+      # The consumer PR code, checked out into the sibling path the harness already points at. In a
+      # reusable workflow a plain checkout pulls the CALLER repo = the PR commit under review, so the
+      # harness's existing path repo now resolves to the PR working copy. ONE mechanism, repointed.
+      - name: Checkout consumer PR
+        uses: actions/checkout@v4
+        with:
+          path: consumer
+
+      # The OTHER sibling middleware the harness path repos reference (the one not under review) is
+      # checked out at its expected released/main version so the harness graph still resolves.
+      - name: Checkout sibling http-wsse-middleware
+        if: ${{ inputs.package != 'php-soap/psr18-wsse-middleware' }}
+        uses: actions/checkout@v4
+        with:
+          repository: php-soap/http-wsse-middleware
+          path: http-wsse-middleware
+      - name: Checkout sibling psr18-attachments-middleware
+        if: ${{ inputs.package != 'php-soap/psr18-attachments-middleware' }}
+        uses: actions/checkout@v4
+        with:
+          repository: php-soap/psr18-attachments-middleware
+          path: psr18-attachments-middleware
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, openssl, intl, gmp, bcmath
+          coverage: none
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('harness/oracle/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2-
+
+      # Two-step build: jar on the host (cached ~/.m2), then a copy-only docker build (seconds).
+      - name: Build oracle jar
+        run: mvn -B -f harness/oracle/pom.xml -DskipTests package
+
+      - name: Build oracle image
+        run: docker build -t java-interop-oracle harness
+
+      - name: Generate certs
+        run: bash harness/certs/generate.sh
+
+      - name: Start oracle
+        run: |
+          docker run -d --name oracle -p 8080:8080 \
+            -v "$PWD/harness/certs:/certs" java-interop-oracle
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+              echo "oracle healthy"; exit 0
+            fi
+            sleep 1
+          done
+          echo "oracle failed to become healthy"; docker logs oracle; exit 1
+
+      # THE OVERRIDE: repoint the harness path repository at the PR checkout, then update only the
+      # consumer package (+ its deps) from there. A path repository wins over Packagist, so the harness
+      # vendor/ is built from the PR working copy = the exact commit under review.
+      #
+      # Detached-HEAD wrinkle: actions/checkout leaves PR checkouts on a detached HEAD, which can stop
+      # composer from inferring a branch/version for the path dependency. We pin it explicitly with
+      # COMPOSER_ROOT_VERSION on the path repo by requiring the alias "*@dev" and letting prefer-stable
+      # fall through to the path version. To be robust we also alias the detached HEAD to a dev branch.
+      - name: Override the harness path repo with the PR checkout
+        working-directory: harness
+        run: |
+          # Give the detached PR checkout a real branch name so composer's path version guesser resolves
+          # a dev-<branch> constraint instead of failing on actions/checkout's bare detached HEAD.
+          git -C ../consumer checkout -B interop-pr-under-test
+
+          # Repoint the SAME named path repo the harness already declares at the PR working copy. This
+          # reuses the local-dev path-repo mechanism verbatim; only the url changes to the PR commit.
+          case "${{ inputs.package }}" in
+            php-soap/psr18-wsse-middleware) REPO=wsse-middleware ;;
+            php-soap/psr18-attachments-middleware) REPO=attachments-middleware ;;
+            *) echo "Unsupported package: ${{ inputs.package }}"; exit 1 ;;
+          esac
+          composer config "repositories.$REPO" \
+            '{"type":"path","url":"../consumer","options":{"symlink":false}}'
+
+          # Require the package at "*@dev" so the path version is eligible, then a full update resolves
+          # the whole graph (the harness ships no lock file, so a partial update is not possible).
+          composer require "${{ inputs.package }}:*@dev" --no-update
+          composer update --with-all-dependencies
+
+      # Prove the path version (not a Packagist release) was selected.
+      - name: Verify PR version is in use
+        working-directory: harness
+        run: |
+          composer show "${{ inputs.package }}"
+          composer show "${{ inputs.package }}" | grep -E 'source|dist' \
+            && echo "Resolved from path repo (PR checkout)."
+
+      - name: Run interop tests
+        working-directory: harness
+        run: vendor/bin/phpunit --testsuite ${{ inputs.suites }}
+
+      - name: Oracle logs (on failure)
+        if: failure()
+        run: docker logs oracle || true

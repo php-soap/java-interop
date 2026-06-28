@@ -1,0 +1,13 @@
+/vendor/
+/composer.lock
+/.phpunit.cache/
+/oracle/target/
+/oracle/dependency-reduced-pom.xml
+
+# Generated cert material (reproduce with certs/generate.sh)
+/certs/*.key
+/certs/*.crt
+/certs/*.csr
+/certs/*.pem
+/certs/*.p12
+/certs/*.srl

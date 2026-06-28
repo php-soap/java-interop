@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         failOnWarning="true"
+         failOnRisky="true"
+         cacheDirectory=".phpunit.cache">
+    <testsuites>
+        <testsuite name="wsse">
+            <directory>tests/Wsse</directory>
+        </testsuite>
+        <testsuite name="attachments">
+            <directory>tests/Attachments</directory>
+        </testsuite>
+    </testsuites>
+    <php>
+        <!-- Base URL of the running WSS4J oracle. Override with the INTEROP_URL env var. -->
+        <env name="INTEROP_URL" value="http://127.0.0.1:8080"/>
+        <!-- Directory holding the shared cert material (ca.crt, php-client.pem, ...). -->
+        <env name="INTEROP_CERTS" value="certs"/>
+    </php>
+</phpunit>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+    <soap:Header>
+        <app:Tracking xmlns:app="urn:php-soap:interop:app" wsu:Id="tracking-1"
+                      xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
+            <app:correlationId>abc-123</app:correlationId>
+        </app:Tracking>
+    </soap:Header>
+    <soap:Body>
+        <tns:Ping xmlns:tns="urn:php-soap:interop">
+            <tns:message>hello from the interop harness</tns:message>
+        </tns:Ping>
+    </soap:Body>
+</soap:Envelope>

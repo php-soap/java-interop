@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+    <soap:Header/>
+    <soap:Body>
+        <tns:Ping xmlns:tns="urn:php-soap:interop">
+            <tns:message>hello from the interop harness</tns:message>
+        </tns:Ping>
+    </soap:Body>
+</soap:Envelope>
