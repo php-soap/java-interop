@@ -43,8 +43,6 @@ import java.util.Map;
 public final class OracleServer {
 
     private static final String STOREPASS = "changeit";
-    private static final String JAVA_SERVER_ALIAS = "java-server";
-    private static final String PHP_CLIENT_ALIAS = "php-client";
 
     private final Crypto crypto;
 
@@ -72,6 +70,7 @@ public final class OracleServer {
         http.createContext("/verify", server.opHandler(server::verify));
         http.createContext("/encrypt", server.opHandler(server::encrypt));
         http.createContext("/decrypt", server.opHandler(server::decrypt));
+        http.createContext("/attach", server::handleAttach);
         http.setExecutor(java.util.concurrent.Executors.newFixedThreadPool(8));
         http.start();
 
@@ -107,7 +106,7 @@ public final class OracleServer {
     }
 
     private void sign(HttpExchange exchange, String body, ScenarioConfig config) throws Exception {
-        String signed = new Signer(crypto, JAVA_SERVER_ALIAS, STOREPASS, config).sign(parsable(body));
+        String signed = new Signer(crypto, config.signatureKeyAlias, STOREPASS, config).sign(parsable(body));
         respond(exchange, 200, "text/xml; charset=UTF-8", signed);
     }
 
@@ -128,7 +127,7 @@ public final class OracleServer {
     }
 
     private void encrypt(HttpExchange exchange, String body, ScenarioConfig config) throws Exception {
-        String encrypted = new Encryptor(crypto, PHP_CLIENT_ALIAS, config).encrypt(parsable(body));
+        String encrypted = new Encryptor(crypto, config.encryptionRecipientAlias, config).encrypt(parsable(body));
         respond(exchange, 200, "text/xml; charset=UTF-8", encrypted);
     }
 
@@ -139,6 +138,96 @@ public final class OracleServer {
             return;
         }
         respond(exchange, 200, "text/xml; charset=UTF-8", result.plaintext);
+    }
+
+    /**
+     * SAAJ attachment endpoint, two ops via {@code ?op=}:
+     * <ul>
+     *   <li>{@code op=emit} — the POST body is the raw attachment bytes; the oracle wraps them in a SwA or
+     *       MTOM multipart/related (the SOAP envelope is the oracle's sample, with an xop:Include inlined for
+     *       MTOM). The response body is the multipart, its media type echoed in the Content-Type header so the
+     *       PHP ResponseBuilder can parse it. Used for the Java->PHP direction.</li>
+     *   <li>{@code op=receive} — the POST body is a multipart produced by the PHP RequestBuilder and the
+     *       request Content-Type carries its boundary. The oracle parses it with SAAJ and answers JSON
+     *       {@code {count, sha256:[..], soap:".."}} so the PHP test can assert count + byte fidelity. Used for
+     *       the PHP->Java direction.</li>
+     * </ul>
+     * Query params: {@code op} (emit|receive), {@code type} (swa|mtom), {@code protocol} (soap11|soap12),
+     * {@code cid} (bare content id for emit).
+     */
+    private void handleAttach(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            respond(exchange, 405, "text/plain", "method not allowed");
+            return;
+        }
+        Map<String, String> q = queryParams(exchange.getRequestURI());
+        String op = q.getOrDefault("op", "receive");
+        String type = q.getOrDefault("type", "swa");
+        String protocol = q.getOrDefault("protocol", "soap12");
+
+        byte[] requestBody;
+        try (InputStream in = exchange.getRequestBody()) {
+            requestBody = in.readAllBytes();
+        }
+
+        try {
+            if ("emit".equals(op)) {
+                String cid = q.getOrDefault("cid", "att1");
+                byte[] soap = soapEnvelopeFor(type, cid);
+                Attachments.EmitResult result = Attachments.emit(type, protocol, soap, requestBody, cid);
+                exchange.getResponseHeaders().set("Content-Type", result.contentType);
+                exchange.sendResponseHeaders(200, result.body.length);
+                try (OutputStream out = exchange.getResponseBody()) {
+                    out.write(result.body);
+                }
+                return;
+            }
+
+            String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+            if (contentType == null || contentType.isEmpty()) {
+                respond(exchange, 400, "text/plain", "missing Content-Type for multipart receive");
+                return;
+            }
+            Attachments.ReceiveResult result = Attachments.receive(requestBody, contentType, protocol);
+            respond(exchange, 200, "application/json", attachJson(result));
+        } catch (Exception e) {
+            respond(exchange, 500, "text/plain", rootMessage(e));
+        }
+    }
+
+    /** The SOAP envelope the emit op wraps: a plain Body for SwA, one carrying an xop:Include for MTOM. */
+    private static byte[] soapEnvelopeFor(String type, String cid) {
+        String body;
+        if ("mtom".equalsIgnoreCase(type)) {
+            body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                    + "<soap:Envelope xmlns:soap=\"http://www.w3.org/2003/05/soap-envelope\">"
+                    + "<soap:Body><tns:Ping xmlns:tns=\"urn:php-soap:interop\">"
+                    + "<tns:message>MTOM-INTEROP-MARKER hello from the interop harness</tns:message>"
+                    + "<tns:data><xop:Include xmlns:xop=\"http://www.w3.org/2004/08/xop/include\" href=\"cid:"
+                    + cid + "\"/></tns:data>"
+                    + "</tns:Ping></soap:Body></soap:Envelope>";
+        } else {
+            body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                    + "<soap:Envelope xmlns:soap=\"http://www.w3.org/2003/05/soap-envelope\">"
+                    + "<soap:Body><tns:Ping xmlns:tns=\"urn:php-soap:interop\">"
+                    + "<tns:message>SWA-INTEROP-MARKER hello from the interop harness</tns:message>"
+                    + "</tns:Ping></soap:Body></soap:Envelope>";
+        }
+        return body.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static String attachJson(Attachments.ReceiveResult result) {
+        StringBuilder shas = new StringBuilder("[");
+        for (int i = 0; i < result.sha256.size(); i++) {
+            if (i > 0) {
+                shas.append(',');
+            }
+            shas.append('"').append(result.sha256.get(i)).append('"');
+        }
+        shas.append(']');
+        return "{\"count\":" + result.count
+                + ",\"sha256\":" + shas
+                + ",\"soap\":\"" + escapeJson(result.soapXml) + "\"}";
     }
 
     /**
@@ -155,6 +244,30 @@ public final class OracleServer {
         }
         if (q.containsKey("sigalg")) {
             config.signatureAlgorithm = q.get("sigalg");
+        }
+        if (q.containsKey("sigalias")) {
+            config.signatureKeyAlias = q.get("sigalias");
+        }
+        if (q.containsKey("enckeyref")) {
+            config.encryptionKeyReference = q.get("enckeyref");
+        }
+        if (q.containsKey("recipient")) {
+            config.encryptionRecipientAlias = q.get("recipient");
+        }
+        if (q.containsKey("ut")) {
+            config.requireUsernameToken = Boolean.parseBoolean(q.get("ut"));
+        }
+        if (q.containsKey("user")) {
+            config.username = q.get("user");
+        }
+        if (q.containsKey("pass")) {
+            config.usernamePassword = q.get("pass");
+        }
+        if (q.containsKey("utdigest")) {
+            config.usernamePasswordDigest = Boolean.parseBoolean(q.get("utdigest"));
+        }
+        if (q.containsKey("sig")) {
+            config.requireSignature = Boolean.parseBoolean(q.get("sig"));
         }
         if (q.containsKey("c14n")) {
             config.canonicalization = q.get("c14n");

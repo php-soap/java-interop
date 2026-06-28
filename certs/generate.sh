@@ -9,9 +9,11 @@
 #   php-client.pem               php-client cert + key + CA chain in one PEM (PHP convenience)
 #   php-client.p12               php-client leaf as PKCS12
 #   java-server.key / .crt       leaf the Java oracle signs/decrypts with
+#   ec-client.key / .crt / .pem  EC P-256 leaf for the ECDSA-SHA256 interop axis (both sides trust it)
 #   interop.p12                  oracle keystore: java-server key/cert + CA trust
 #   interop-recipients.p12       oracle keystore the server loads: java-server key + CA trust
 #                                + php-client CERT (encrypt recipient + SKI/IssuerSerial resolution)
+#                                + ec-client KEY (so the oracle can sign/verify ECDSA-SHA256)
 #   untrusted-ca.* / untrusted-client.* / untrusted.p12   issued by a DIFFERENT CA, for negative tests
 #
 # Both real leaves are issued by the same CA, so each side trusts the other's signature.
@@ -68,6 +70,17 @@ gen_leaf() { # <name> <cn> <ca>
   rm -f "${name}.csr"
 }
 
+gen_ec_leaf() { # <name> <cn> <ca>  — EC P-256 leaf for the ECDSA-SHA256 interop axis
+  local name="$1" cn="$2" ca="$3"
+  openssl ecparam -name prime256v1 -genkey -noout -out "${name}.key"
+  openssl req -new -key "${name}.key" \
+    -subj "/C=BE/O=php-soap interop/CN=${cn}" \
+    -out "${name}.csr"
+  openssl x509 -req -in "${name}.csr" -CA "${ca}.crt" -CAkey "${ca}.key" -CAcreateserial \
+    -days "${DAYS}" -sha256 -out "${name}.crt"
+  rm -f "${name}.csr"
+}
+
 import_cert() { # <p12> <alias> <cert.crt>  — add an aliased trusted-cert entry (Merlin needs the alias)
   local p12="$1" alias="$2" cert="$3"
   keytool_run -importcert -noprompt -trustcacerts \
@@ -111,6 +124,22 @@ openssl pkcs12 -export \
   -name java-server -passout "pass:${STOREPASS}" -out interop-recipients.p12
 import_cert interop-recipients.p12 interop-ca ca.crt
 import_cert interop-recipients.p12 php-client php-client.crt
+
+echo "==> 5b. EC client leaf (ECDSA-SHA256 axis): EC P-256 key, CA-signed"
+# An elliptic-curve leaf issued by the shared CA so both stacks trust an ECDSA signature. The PHP side
+# signs/verifies with ec-client.pem; the oracle signs/verifies with the ec-client entry in its keystore.
+gen_ec_leaf ec-client "php-soap ec client" ca
+cat ec-client.crt ec-client.key ca.crt > ec-client.pem
+# Add the EC key (for the oracle to sign ECDSA) and cert (recipient/SKI resolution) to the recipients store.
+rm -f ec-client.p12
+openssl pkcs12 -export -inkey ec-client.key -in ec-client.crt -certfile ca.crt \
+  -name ec-client -passout "pass:${STOREPASS}" -out ec-client.p12
+# Merge the ec-client key entry into the oracle keystore so a single Crypto can sign with java-server (RSA)
+# or ec-client (ECDSA), selected per request by alias.
+keytool_run -importkeystore -noprompt \
+  -srckeystore ec-client.p12 -srcstoretype PKCS12 -srcstorepass "${STOREPASS}" -srcalias ec-client \
+  -destkeystore interop-recipients.p12 -deststoretype PKCS12 -deststorepass "${STOREPASS}" -destalias ec-client \
+  2>/dev/null || echo "    (ec-client already present in interop-recipients.p12, or keytool unavailable — continuing)"
 
 echo "==> 6. Untrusted CA + client (negative tests: signer the oracle must reject)"
 gen_ca untrusted-ca "php-soap untrusted CA"

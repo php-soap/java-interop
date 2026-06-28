@@ -22,6 +22,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- WSS4J 3.x: the current reference WSSE/WS-Security DOM implementation. -->
         <wss4j.version>3.0.4</wss4j.version>
+        <saaj.version>3.0.4</saaj.version>
         <slf4j.version>2.0.13</slf4j.version>
         <exec.mainClass>org.phpsoap.interop.OracleServer</exec.mainClass>
     </properties>
@@ -39,6 +40,18 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
             <version>${slf4j.version}</version>
+        </dependency>
+
+        <!-- SAAJ: SOAP-with-Attachments + MTOM parsing/emission (jakarta.xml.soap) for the /attach endpoint. -->
+        <dependency>
+            <groupId>com.sun.xml.messaging.saaj</groupId>
+            <artifactId>saaj-impl</artifactId>
+            <version>${saaj.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.xml.soap</groupId>
+            <artifactId>jakarta.xml.soap-api</artifactId>
+            <version>3.0.1</version>
         </dependency>
     </dependencies>
 

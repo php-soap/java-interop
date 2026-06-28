@@ -57,10 +57,32 @@ final class Oracle
     }
 
     /**
-     * @return array{status:int, body:string}|null
+     * POST a raw (possibly binary) body and return the response Content-Type header alongside the body. The
+     * attachment emit endpoint returns the multipart media type (with boundary) only in that header, so the
+     * caller needs it to parse the multipart back.
+     *
+     * @return array{status:int, body:string, contentType:string}
      */
-    private static function request(string $method, string $path, ?string $body = null, ?string $contentType = null): ?array
+    public static function postRaw(string $path, string $body, string $contentType): array
     {
+        $response = self::request('POST', $path, $body, $contentType, withResponseHeaders: true);
+        if ($response === null) {
+            throw new \RuntimeException('Oracle did not respond to POST ' . $path);
+        }
+
+        return $response;
+    }
+
+    /**
+     * @return ($withResponseHeaders is true ? array{status:int, body:string, contentType:string}|null : array{status:int, body:string}|null)
+     */
+    private static function request(
+        string $method,
+        string $path,
+        ?string $body = null,
+        ?string $contentType = null,
+        bool $withResponseHeaders = false,
+    ): ?array {
         $ch = curl_init(self::baseUrl() . $path);
         curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -71,6 +93,17 @@ final class Oracle
             curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: ' . ($contentType ?? 'text/xml')]);
         }
 
+        $responseContentType = '';
+        if ($withResponseHeaders) {
+            curl_setopt($ch, CURLOPT_HEADERFUNCTION, static function ($curl, string $header) use (&$responseContentType): int {
+                if (stripos($header, 'content-type:') === 0) {
+                    $responseContentType = trim(substr($header, strlen('content-type:')));
+                }
+
+                return strlen($header);
+            });
+        }
+
         $responseBody = curl_exec($ch);
         if ($responseBody === false) {
             curl_close($ch);
@@ -79,6 +112,10 @@ final class Oracle
         }
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+
+        if ($withResponseHeaders) {
+            return ['status' => $status, 'body' => (string) $responseBody, 'contentType' => $responseContentType];
+        }
 
         return ['status' => $status, 'body' => (string) $responseBody];
     }

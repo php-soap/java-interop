@@ -48,11 +48,19 @@ tests/
 | `POST /verify` | signed envelope | `200 {"valid":true}` or `200 {"valid":false,"reason":"..."}`; `400` only on malformed XML |
 | `POST /encrypt` | envelope | WSS4J-encrypted envelope, recipient = `php-client` cert |
 | `POST /decrypt` | encrypted envelope | decrypted envelope, using the `java-server` private key |
+| `POST /attach?op=emit` | raw attachment bytes | SwA/MTOM multipart (media type in the `Content-Type` header) for the PHP ResponseBuilder |
+| `POST /attach?op=receive` | PHP multipart body | `200 {"count":N,"sha256":[..],"soap":".."}` parsed by SAAJ |
 
 Op parameters default to the interop happy flow (RSA-SHA256, exclusive C14N, BST key reference,
 AES-256-GCM + RSA-OAEP). Override per request via query string, e.g.
 `POST /sign?keyref=SubjectKeyIdentifier&sigalg=RSA_SHA512&c14n=INCLUSIVE`,
-`POST /encrypt?encdata=AES256_CBC&oaep=SHA256`.
+`POST /encrypt?encdata=AES256_CBC&oaep=SHA256&enckeyref=IssuerSerial`.
+
+Recognised query params:
+- `/sign`: `keyref`, `sigalg` (`RSA_SHA256|RSA_SHA512|ECDSA_SHA256`), `sigalias` (`java-server`|`ec-client`), `c14n`, `disableBsp`, `ttl`.
+- `/verify`: `sigalg`, `disableBsp`, `ttl`; `sig`/`ts`/`ut` (require-flags) + `user`/`pass`/`utdigest` for UsernameToken validation.
+- `/encrypt`: `encdata` (`AES256_GCM|AES256_CBC`), `oaep` (`SHA1|SHA256`), `enckeyref` (`SubjectKeyIdentifier|IssuerSerial`), `recipient`.
+- `/attach`: `op` (`emit|receive`), `type` (`swa|mtom`), `protocol` (`soap11|soap12`), `cid`.
 
 A verification "no" is a normal `200` with `valid:false` — only an unparseable body is a `400`.
 
@@ -65,7 +73,8 @@ A verification "no" is a normal `200` with `valid:false` — only an unparseable
 | `ca.crt` | both | shared trust anchor |
 | `php-client.pem` (`.key`/`.crt`) | PHP | the cert the middleware signs / decrypts with |
 | `java-server.key`/`.crt` | oracle | the cert the oracle signs / decrypts with |
-| `interop-recipients.p12` | oracle | the keystore the oracle loads at startup: `java-server` key (sign/decrypt) + `interop-ca` trust (verify) + `php-client` cert (encrypt recipient & SKI/IssuerSerial resolution) |
+| `ec-client.pem` (`.key`/`.crt`) | both | EC P-256 leaf for the ECDSA-SHA256 axis (PHP signs with it; oracle holds the key under the `ec-client` alias) |
+| `interop-recipients.p12` | oracle | the keystore the oracle loads at startup: `java-server` key (sign/decrypt) + `interop-ca` trust (verify) + `php-client` cert (encrypt recipient & SKI/IssuerSerial resolution) + `ec-client` key (ECDSA sign/verify) |
 | `untrusted-*` | tests | a different CA's leaf, for negative tests |
 
 The container mounts `certs/` at `/certs` (`docker run -v "$PWD/certs:/certs"`); the oracle reads
@@ -109,8 +118,19 @@ clean PHP 8.4 image and point it at the host oracle:
 ```bash
 docker run --rm -v "$PWD:/ji" -w /ji \
   -e INTEROP_URL=http://host.docker.internal:8080 \
+  -e INTEROP_CERTS=/ji/certs \
   --add-host=host.docker.internal:host-gateway \
   <php84-image> vendor/bin/phpunit --testsuite wsse
+```
+
+A working `<php84-image>` is the official `php:8.4-cli` (8.4.22 at time of writing, past the libxml C14N
+quirk) with `intl gmp bcmath` installed and composer copied in:
+
+```dockerfile
+FROM php:8.4-cli
+RUN apt-get update && apt-get install -y libicu-dev libgmp-dev libxml2-dev unzip git \
+ && docker-php-ext-install intl gmp bcmath && rm -rf /var/lib/apt/lists/*
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 ```
 
 ## Running against a PR branch

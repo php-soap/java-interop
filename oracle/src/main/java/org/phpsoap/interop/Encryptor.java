@@ -51,7 +51,7 @@ final class Encryptor {
 
         WSSecEncrypt encrypt = new WSSecEncrypt(header);
         encrypt.setUserInfo(recipientAlias);
-        encrypt.setKeyIdentifierType(WSConstants.SKI_KEY_IDENTIFIER);
+        encrypt.setKeyIdentifierType(keyIdentifierType(config.encryptionKeyReference));
         encrypt.setSymmetricEncAlgorithm(dataAlgo);
         encrypt.setKeyEncAlgo(keyAlgorithm(config.keyEncryptionAlgorithm));
         encrypt.setDigestAlgorithm(oaepDigestAlgorithm(config.oaepDigest));
@@ -73,6 +73,22 @@ final class Encryptor {
         // The PHP decryptor resolves a xenc:DataReference target by either @Id or @wsu:Id, so no relabel
         // shim is needed for the Java->PHP direction.
         return Xml.serialize(document);
+    }
+
+    /** Maps the PHP EncKeyRef enum names to the WSS4J key-identifier constants for the recipient KeyInfo. */
+    static int keyIdentifierType(String keyReference) {
+        switch (keyReference) {
+            case "SubjectKeyIdentifier":
+                return WSConstants.SKI_KEY_IDENTIFIER;
+            case "IssuerSerial":
+                return WSConstants.ISSUER_SERIAL;
+            case "Thumbprint":
+                return WSConstants.THUMBPRINT_IDENTIFIER;
+            case "BinarySecurityToken":
+                return WSConstants.BST_DIRECT_REFERENCE;
+            default:
+                throw new IllegalArgumentException("Unknown encryption.keyReference: " + keyReference);
+        }
     }
 
     static String dataAlgorithm(String name) {

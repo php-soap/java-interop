@@ -35,6 +35,22 @@ public final class ScenarioConfig {
     public String signatureAlgorithm = "RSA_SHA256";
 
     /**
+     * Keystore alias the signer uses. Defaults to the RSA java-server key; the ECDSA-SHA256 rows select the
+     * EC leaf (ec-client) so the signature algorithm and key type agree.
+     */
+    public String signatureKeyAlias = "java-server";
+
+    /**
+     * WSSE key-reference style the encryptor puts in the recipient KeyInfo, mirroring the PHP EncKeyRef enum.
+     * SubjectKeyIdentifier (default) or IssuerSerial; lets the Java->PHP encryption recipient-resolution
+     * variants be cross-tested.
+     */
+    public String encryptionKeyReference = "SubjectKeyIdentifier";
+
+    /** Keystore alias of the encryption recipient. Defaults to the php-client cert (Java->PHP direction). */
+    public String encryptionRecipientAlias = "php-client";
+
+    /**
      * ds:SignedInfo canonicalization: EXCLUSIVE (default, xml-exc-c14n#) or INCLUSIVE
      * (Canonical XML 1.0, REC-xml-c14n-20010315). Lets the harness emit inclusive-C14N
      * signatures so the PHP Inbound\VerifySignature inclusive-C14N path can be cross-tested.
