@@ -24,6 +24,9 @@ on:
 
 jobs:
   interop:
+    # A tag is a release of already-tested code, and a tag name is not a dev branch the package version can
+    # resolve to, so skip the suite on tag pushes (it runs on branches and pull requests).
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
