@@ -28,8 +28,8 @@
         "php": "~8.4.0 || ~8.5.0",
         "ext-dom": "*",
         "ext-openssl": "*",
-        "php-soap/psr18-wsse-middleware": "dev-feature/wsse-engine-modernization",
-        "php-soap/psr18-attachments-middleware": "dev-feature/migrate-to-psl-mime",
+        "php-soap/psr18-wsse-middleware": "@dev",
+        "php-soap/psr18-attachments-middleware": "@dev",
         "nyholm/psr7": "^1.8",
         "symfony/http-client": "^7.1"
     },
