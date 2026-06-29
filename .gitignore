@@ -1,5 +1,7 @@
 /vendor/
 /composer.lock
+/composer.run.json
+/composer.run.lock
 /.phpunit.cache/
 /oracle/target/
 /oracle/dependency-reduced-pom.xml

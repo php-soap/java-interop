@@ -40,7 +40,7 @@ oracle/                 Java HTTP oracle (Maven module, artifact java-interop-or
 Dockerfile              single-stage; copies the prebuilt jar (build is a ~seconds copy)
 certs/generate.sh       pure-openssl (+keytool) CA + leaves + keystores generator (idempotent)
 samples/                unsigned SOAP request fixtures
-composer.json           dev tooling + path repos to the sibling middlewares
+composer.json           dev tooling (declares no repositories; the source is injected per context)
 phpunit.xml.dist        one <testsuite> per feature area (wsse, attachments)
 tests/
   Support/              Oracle HTTP client + InteropTestCase base
@@ -103,7 +103,7 @@ takes seconds.
 mvn -f oracle/pom.xml -DskipTests package
 #   no maven on PATH? ->
 #   docker run --rm -v "$PWD:/app" -w /app -v "$HOME/.m2:/root/.m2" \
-#     maven:3-eclipse-temurin-17 mvn -f oracle/pom.xml -DskipTests package
+#     maven:3-eclipse-temurin-21 mvn -f oracle/pom.xml -DskipTests package
 
 # 2. Copy-only image build (~seconds)
 docker build -t java-interop-oracle .
@@ -124,7 +124,7 @@ oracle and waits until it is healthy, runs PHPUnit in the PHP container, and alw
 down at the end (even when a test fails).
 
 Running everything in containers also avoids host-libxml differences: XML canonicalisation is
-libxml-version sensitive, and the PHP runner image is a recent `php:8.4-cli` (past the older host
+libxml-version sensitive, and the PHP runner image is a recent `php:8.5-cli` (past the older host
 8.4.13 libxml C14N quirk).
 
 ### Compose model
@@ -134,10 +134,15 @@ libxml-version sensitive, and the PHP runner image is a recent `php:8.4-cli` (pa
 - `oracle`: the WSS4J reference server (built from `Dockerfile`, certs mounted at `/certs`, a
   `/health` healthcheck).
 - `php`: the PHPUnit runner (built from `tests/php.Dockerfile`). It mounts the parent `php-soap`
-  directory at `/work` so the composer path repos (`../http-wsse-middleware`,
+  directory at `/work` so the sibling working copies (`../http-wsse-middleware`,
   `../psr18-attachments-middleware`) resolve, and reaches the oracle by service name
   (`INTEROP_URL=http://oracle:8080`) over the compose network, so the tests need no
   `host.docker.internal` and no published port.
+
+The committed `composer.json` declares no repositories. `make test` / `make interop` copy it to a
+gitignored `composer.run.json` and inject path repos to the two sibling working copies there, so the
+committed file is never dirtied. Those siblings are expected to be checked out next to this repo (on
+the branches that carry the code the tests exercise).
 
 ### Individual targets
 
@@ -168,27 +173,19 @@ jobs:
       suites: wsse                              # which testsuite(s) to run
 ```
 
-How it targets the PR commit, using a single mechanism shared with local dev:
+It runs on PHP 8.4 and 8.5 by default; pass `php-versions` (a JSON array) to change that.
 
-- The harness `composer.json` declares path repositories to the sibling middlewares
-  (`../http-wsse-middleware`, `../psr18-attachments-middleware`). Locally these point at your working
-  copies; a path repository always wins over Packagist.
-- In a reusable workflow a plain `actions/checkout@v4` pulls the caller repo, i.e. the PR commit.
-  The workflow lays that checkout out at `./consumer` and repoints the harness's path repo for the
-  package under review at it. So `vendor/` is built from the PR working copy. CI just moves the path the
-  path-repo points at; local and PR runs share the same code path.
-- It then runs `composer require "<package>:*@dev" --no-update` followed by a full
-  `composer update --with-all-dependencies`. The harness sets `minimum-stability: dev` +
-  `prefer-stable: true` so `:*@dev` resolves to the path version. `composer update` prints
-  `Mirroring from ../consumer` and `composer show <package>` reports `dist: [path] ../consumer <sha>`,
-  confirming the PR commit is in use.
-- Detached HEAD: `actions/checkout` leaves PR checkouts on a detached HEAD, which stops composer
-  from inferring a version for the path dependency. The workflow runs
-  `git -C ../consumer checkout -B interop-pr-under-test` first, giving it a branch name so composer
-  resolves a `dev-<branch>` version.
+How it targets the PR commit, with nothing hardcoded:
 
-The other sibling middleware (the one not under review) is checked out at its released/main version
-so the dependency graph still resolves.
+- The harness `composer.json` declares no repositories; the workflow supplies the source at runtime.
+- `actions/checkout` pulls the caller. For a pull request it resolves the originating repository and
+  ref, so a fork's PR is checked out from the fork. That checkout is the package source.
+- The workflow names the checkout after the PR branch (`github.head_ref`), adds it as a path repo, and
+  requires the package at `dev-<that-branch>`. Composer resolves the exact checked-out code, so the run
+  follows whatever branch is under review. No `@dev`, and no branch or repository baked into the workflow.
+- Naming the checkout also settles the detached HEAD a pull request produces, so composer can derive
+  the `dev-<branch>` version from it.
 
-This repo's own CI (`ci.yml`) runs on every push/PR and uses the sibling path repos at their
-released/main checkouts (no consumer override), so changes to the harness itself are self-tested.
+The source is injected per context: local `make` adds path repos to the `../` siblings; `interop.yml`
+adds a path repo to the PR checkout; `ci.yml` declares nothing and resolves from Packagist, so it goes
+green once the middleware code these tests exercise is released to its main branch.

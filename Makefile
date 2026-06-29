@@ -4,12 +4,26 @@
 # One command:   make interop            (full suite)
 #                make interop SUITE=wsse (one testsuite: wsse | attachments)
 
-MVN_IMG  := maven:3-eclipse-temurin-17
+MVN_IMG  := maven:3-eclipse-temurin-21
 JAR      := oracle/target/java-interop-oracle.jar
 
 # Optional: SUITE=wsse|attachments restricts the run to one testsuite.
 SUITE    :=
 SUITE_ARG = $(if $(SUITE),--testsuite $(SUITE),)
+
+# The committed composer.json declares NO repositories — the middleware source is injected per
+# context. Locally we never touch the committed file: we copy it to a gitignored composer.run.json
+# and inject path repos to the sibling working copies (../http-wsse-middleware,
+# ../psr18-attachments-middleware), which are checked out on their feature branches and carry the
+# new code. Run composer against that copy via COMPOSER=composer.run.json.
+#
+# Post-merge (both feature branches on main, new code on Packagist): the sibling repos are no longer
+# needed, and this whole dance can collapse to a plain `composer install --no-interaction`.
+RUN_PHP = cp composer.json composer.run.json && \
+	COMPOSER=composer.run.json composer config repositories.wsse path ../http-wsse-middleware && \
+	COMPOSER=composer.run.json composer config repositories.attachments path ../psr18-attachments-middleware && \
+	COMPOSER=composer.run.json composer update --no-interaction && \
+	vendor/bin/phpunit $(SUITE_ARG)
 
 .PHONY: help jar certs images up down test interop clean
 
@@ -42,8 +56,7 @@ down:
 	docker compose down -v
 
 test:
-	docker compose run --rm php sh -lc \
-	  "composer install --no-interaction && vendor/bin/phpunit $(SUITE_ARG)"
+	docker compose run --rm php sh -lc "$(RUN_PHP)"
 
 # The one-liner a user runs. Order: jar -> images -> certs -> up -> test, always tearing down at the
 # end (even on test failure) so no containers/volumes are left behind.
@@ -51,8 +64,7 @@ interop: jar images certs
 	@set -e; \
 	docker compose up -d --wait oracle; \
 	status=0; \
-	docker compose run --rm php sh -lc \
-	  "composer install --no-interaction && vendor/bin/phpunit $(SUITE_ARG)" || status=$$?; \
+	docker compose run --rm php sh -lc "$(RUN_PHP)" || status=$$?; \
 	docker compose down -v; \
 	exit $$status
 
