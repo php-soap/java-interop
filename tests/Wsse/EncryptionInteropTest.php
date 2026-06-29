@@ -12,7 +12,7 @@ use Soap\Psr18WsseMiddleware\WSSecurity\Algorithm\DataEncryptionMethod;
 use Soap\Psr18WsseMiddleware\WSSecurity\Algorithm\KeyTransportAlgorithm;
 use Soap\Psr18WsseMiddleware\WSSecurity\Exception\SecurityFault;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
-use Soap\Psr18WsseMiddleware\WSSecurity\KeyStore\Key;
+use Soap\Psr18WsseMiddleware\KeyStore\Key;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
 use Soap\Psr18WsseMiddleware\WSSecurity\SoapVersion;

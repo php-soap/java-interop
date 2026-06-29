@@ -9,11 +9,11 @@ use SoapInterop\Tests\Support\Oracle;
 use SoapInterop\Tests\Support\Wsse;
 use Soap\Psr18WsseMiddleware\WSSecurity\Algorithm\SignatureCanonicalization;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
-use Soap\Psr18WsseMiddleware\WSSecurity\KeyStore\Certificate;
+use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
 use Soap\Psr18WsseMiddleware\WSSecurity\SoapVersion;
-use Soap\Psr18WsseMiddleware\WSSecurity\KeyStore\TrustStore;
+use Soap\Psr18WsseMiddleware\KeyStore\TrustStore;
 use Soap\Psr18WsseMiddleware\WSSecurity\WsseContext;
 use VeeWee\Xml\Dom\Document;
 
