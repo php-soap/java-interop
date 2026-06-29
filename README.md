@@ -1,7 +1,10 @@
 # php-soap / java-interop
 
-Cross-stack SOAP interop tests. PHPUnit tests drive the **php-soap middlewares** and assert they
-interoperate, over HTTP, with a Dockerised **Apache WSS4J** reference implementation (the "oracle").
+Cross-stack SOAP interop tests. PHPUnit tests drive the php-soap middlewares and assert they
+interoperate, over HTTP, with a Dockerised Apache WSS4J reference implementation (the "oracle").
+
+This is a test harness, not a published library. Do not `composer require` it as a dependency; run it
+through its own test suite (see [Run locally](#run-locally)) or the reusable CI workflow.
 
 ```
 PHPUnit (tests/Wsse, tests/Attachments)
@@ -15,6 +18,15 @@ PHPUnit (tests/Wsse, tests/Attachments)
 Each direction is tested: PHP signs/encrypts and the oracle verifies/decrypts, and the oracle
 signs/encrypts and the PHP middleware verifies/decrypts. Cert material is shared between both sides so
 each trusts the other.
+
+# Want to help out? 💚
+
+- [Become a Sponsor](https://github.com/php-soap/.github/blob/main/HELPING_OUT.md#sponsor)
+- [Let us do your implementation](https://github.com/php-soap/.github/blob/main/HELPING_OUT.md#let-us-do-your-implementation)
+- [Contribute](https://github.com/php-soap/.github/blob/main/HELPING_OUT.md#contribute)
+- [Help maintain these packages](https://github.com/php-soap/.github/blob/main/HELPING_OUT.md#maintain)
+
+Want more information about the future of this project? Check out this list of the [next big projects](https://github.com/php-soap/.github/blob/main/PROJECTS.md) we'll be working on.
 
 ## Layout
 
@@ -43,7 +55,7 @@ tests/
 
 | Method + path | Body | Response |
 |---|---|---|
-| `GET /health` | – | `200 ok` |
+| `GET /health` | (none) | `200 ok` |
 | `POST /sign` | SOAP envelope | WSS4J-signed envelope (`text/xml`) |
 | `POST /verify` | signed envelope | `200 {"valid":true}` or `200 {"valid":false,"reason":"..."}`; `400` only on malformed XML |
 | `POST /encrypt` | envelope | WSS4J-encrypted envelope, recipient = `php-client` cert |
@@ -62,7 +74,7 @@ Recognised query params:
 - `/encrypt`: `encdata` (`AES256_GCM|AES256_CBC`), `oaep` (`SHA1|SHA256`), `enckeyref` (`SubjectKeyIdentifier|IssuerSerial`), `recipient`.
 - `/attach`: `op` (`emit|receive`), `type` (`swa|mtom`), `protocol` (`soap11|soap12`), `cid`.
 
-A verification "no" is a normal `200` with `valid:false` — only an unparseable body is a `400`.
+A verification "no" is a normal `200` with `valid:false`. Only an unparseable body returns `400`.
 
 ## How certs/keystores wire between the container and PHP
 
@@ -106,7 +118,7 @@ make interop                 # full suite (wsse + attachments)
 make interop SUITE=wsse      # one testsuite: wsse | attachments
 ```
 
-The **only prerequisite is Docker** — no host PHP, Java or Maven. `make interop` builds the oracle jar
+The only prerequisite is Docker: no host PHP, Java, or Maven. `make interop` builds the oracle jar
 (via the maven docker image, `~/.m2` cached), builds the two images, (re)generates the certs, starts the
 oracle and waits until it is healthy, runs PHPUnit in the PHP container, and always tears everything
 down at the end (even when a test fails).
@@ -119,13 +131,13 @@ libxml-version sensitive, and the PHP runner image is a recent `php:8.4-cli` (pa
 
 `docker-compose.yml` defines two services on the default compose network:
 
-- `oracle` — the WSS4J reference server (built from `Dockerfile`, certs mounted at `/certs`, a
+- `oracle`: the WSS4J reference server (built from `Dockerfile`, certs mounted at `/certs`, a
   `/health` healthcheck).
-- `php` — the PHPUnit runner (built from `tests/php.Dockerfile`). It mounts the **parent** `php-soap`
+- `php`: the PHPUnit runner (built from `tests/php.Dockerfile`). It mounts the parent `php-soap`
   directory at `/work` so the composer path repos (`../http-wsse-middleware`,
-  `../psr18-attachments-middleware`) resolve, and reaches the oracle by **service name**
-  (`INTEROP_URL=http://oracle:8080`) over the compose network — no `host.docker.internal`, no published
-  port required for the tests.
+  `../psr18-attachments-middleware`) resolve, and reaches the oracle by service name
+  (`INTEROP_URL=http://oracle:8080`) over the compose network, so the tests need no
+  `host.docker.internal` and no published port.
 
 ### Individual targets
 
@@ -142,7 +154,7 @@ make clean    # remove the built jar and compose volumes
 
 ## Running against a PR branch
 
-A consumer middleware repo runs the interop suite against the **exact commit under review** by calling
+A consumer middleware repo runs the interop suite against the exact commit under review by calling
 the reusable workflow. Add this to the consumer repo's `.github/workflows/interop.yml`:
 
 ```yaml
@@ -156,13 +168,13 @@ jobs:
       suites: wsse                              # which testsuite(s) to run
 ```
 
-How it targets the PR commit, using **one** mechanism shared with local dev:
+How it targets the PR commit, using a single mechanism shared with local dev:
 
-- The harness `composer.json` declares **path repositories** to the sibling middlewares
+- The harness `composer.json` declares path repositories to the sibling middlewares
   (`../http-wsse-middleware`, `../psr18-attachments-middleware`). Locally these point at your working
   copies; a path repository always wins over Packagist.
-- In a reusable workflow a plain `actions/checkout@v4` pulls the **caller** repo — i.e. the PR commit.
-  The workflow lays that checkout out at `./consumer` and **repoints the harness's path repo** for the
+- In a reusable workflow a plain `actions/checkout@v4` pulls the caller repo, i.e. the PR commit.
+  The workflow lays that checkout out at `./consumer` and repoints the harness's path repo for the
   package under review at it. So `vendor/` is built from the PR working copy. CI just moves the path the
   path-repo points at; local and PR runs share the same code path.
 - It then runs `composer require "<package>:*@dev" --no-update` followed by a full
@@ -170,13 +182,13 @@ How it targets the PR commit, using **one** mechanism shared with local dev:
   `prefer-stable: true` so `:*@dev` resolves to the path version. `composer update` prints
   `Mirroring from ../consumer` and `composer show <package>` reports `dist: [path] ../consumer <sha>`,
   confirming the PR commit is in use.
-- **Detached HEAD:** `actions/checkout` leaves PR checkouts on a detached HEAD, which stops composer
+- Detached HEAD: `actions/checkout` leaves PR checkouts on a detached HEAD, which stops composer
   from inferring a version for the path dependency. The workflow runs
   `git -C ../consumer checkout -B interop-pr-under-test` first, giving it a branch name so composer
   resolves a `dev-<branch>` version.
 
-The **other** sibling middleware (the one not under review) is checked out at its released/main version
+The other sibling middleware (the one not under review) is checked out at its released/main version
 so the dependency graph still resolves.
 
-This repo's **own** CI (`ci.yml`) runs on every push/PR and uses the sibling path repos at their
-released/main checkouts — no consumer override — so changes to the harness itself are self-tested.
+This repo's own CI (`ci.yml`) runs on every push/PR and uses the sibling path repos at their
+released/main checkouts (no consumer override), so changes to the harness itself are self-tested.
