@@ -24,9 +24,6 @@ on:
 
 jobs:
   interop:
-    # A tag is a release of already-tested code, and a tag name is not a dev branch the package version can
-    # resolve to, so skip the suite on tag pushes (it runs on branches and pull requests).
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -78,18 +75,18 @@ jobs:
             sleep 1
           done
 
-      # Point the harness at the checked-out middleware. The checkout above is the commit under test, so a
-      # path repository to it is the source; composer derives the package version from the checkout's branch.
-      # Give the (possibly detached) PR checkout that branch name so the derived dev-<branch> is unambiguous.
+      # Point the harness at the checked-out middleware. The checkout above is the code under test for whatever
+      # ref triggered the run: a branch, a tag, or a pull request merge. Put it on a fixed local branch so the
+      # path repository always presents it as dev-interop-ref, independent of the ref name. This is what makes
+      # tags work: a tag like 0.10.0 would otherwise normalise to 0.10.0.x-dev and not match a dev constraint.
       - name: Resolve the middleware from the checkout
         working-directory: harness
         env:
           PACKAGE: ${{ inputs.package }}
-          BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
-          git -C ../middleware checkout -B "$BRANCH"
+          git -C ../middleware checkout -B interop-ref
           composer config repositories.middleware path ../middleware
-          composer require "$PACKAGE:dev-$BRANCH" --no-update
+          composer require "$PACKAGE:dev-interop-ref" --no-update
           composer update --with-all-dependencies --no-interaction --no-progress
 
       - name: Run interop tests

@@ -175,16 +175,16 @@ jobs:
 
 It runs on PHP 8.4 and 8.5 by default; pass `php-versions` (a JSON array) to change that.
 
-How it targets the PR commit, with nothing hardcoded:
+How it targets the code under test, with nothing hardcoded:
 
 - The harness `composer.json` declares no repositories; the workflow supplies the source at runtime.
 - `actions/checkout` pulls the caller. For a pull request it resolves the originating repository and
-  ref, so a fork's PR is checked out from the fork. That checkout is the package source.
-- The workflow names the checkout after the PR branch (`github.head_ref`), adds it as a path repo, and
-  requires the package at `dev-<that-branch>`. Composer resolves the exact checked-out code, so the run
-  follows whatever branch is under review. No `@dev`, and no branch or repository baked into the workflow.
-- Naming the checkout also settles the detached HEAD a pull request produces, so composer can derive
-  the `dev-<branch>` version from it.
+  ref, so a fork's PR is checked out from the fork. That checkout is the package source, whatever ref
+  triggered the run: a branch, a tag, or a pull request.
+- The workflow puts that checkout on a fixed local branch and adds it as a path repo, so composer always
+  presents it as `dev-interop-ref` and resolves the exact checked-out code. The fixed name is what keeps
+  it ref-agnostic: a tag like `0.10.0` would otherwise normalise to `0.10.0.x-dev` and miss a dev
+  constraint. No `@dev`, and no branch, tag, or repository baked into the workflow.
 
 The source is injected per context: local `make` adds path repos to the `../` siblings; `interop.yml`
 adds a path repo to the PR checkout; `ci.yml` declares nothing and resolves from Packagist, so it goes
