@@ -59,6 +59,17 @@ gen_ca() { # <name> <cn>
     -out "${name}.crt"
 }
 
+# v3 leaf extensions. The WSSE SubjectKeyIdentifier and IssuerSerial key references need a version 3
+# certificate that carries a subjectKeyIdentifier. Without explicit extensions openssl may emit a version 1
+# leaf without one, and the default varies by platform openssl, so the extensions are forced here to keep
+# the certs identical everywhere.
+LEAF_EXT="${CERT_DIR}/leaf.ext"
+cat > "${LEAF_EXT}" <<'EXT'
+basicConstraints = CA:FALSE
+subjectKeyIdentifier = hash
+keyUsage = digitalSignature, keyEncipherment
+EXT
+
 gen_leaf() { # <name> <cn> <ca>
   local name="$1" cn="$2" ca="$3"
   openssl genrsa -out "${name}.key" 2048
@@ -66,7 +77,7 @@ gen_leaf() { # <name> <cn> <ca>
     -subj "/C=BE/O=php-soap interop/CN=${cn}" \
     -out "${name}.csr"
   openssl x509 -req -in "${name}.csr" -CA "${ca}.crt" -CAkey "${ca}.key" -CAcreateserial \
-    -days "${DAYS}" -sha256 -out "${name}.crt"
+    -days "${DAYS}" -sha256 -extfile "${LEAF_EXT}" -out "${name}.crt"
   rm -f "${name}.csr"
 }
 
@@ -77,7 +88,7 @@ gen_ec_leaf() { # <name> <cn> <ca>  — EC P-256 leaf for the ECDSA-SHA256 inter
     -subj "/C=BE/O=php-soap interop/CN=${cn}" \
     -out "${name}.csr"
   openssl x509 -req -in "${name}.csr" -CA "${ca}.crt" -CAkey "${ca}.key" -CAcreateserial \
-    -days "${DAYS}" -sha256 -out "${name}.crt"
+    -days "${DAYS}" -sha256 -extfile "${LEAF_EXT}" -out "${name}.crt"
   rm -f "${name}.csr"
 }
 
@@ -147,6 +158,8 @@ gen_leaf untrusted-client "php-soap untrusted client" untrusted-ca
 cat untrusted-client.crt untrusted-client.key untrusted-ca.crt > untrusted-client.pem
 openssl pkcs12 -export -inkey untrusted-client.key -in untrusted-client.crt -certfile untrusted-ca.crt \
   -name untrusted-client -passout "pass:${STOREPASS}" -out untrusted.p12
+
+rm -f "${LEAF_EXT}"
 
 echo
 echo "Done. Files in ${CERT_DIR}:"
