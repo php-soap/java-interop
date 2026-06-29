@@ -6,6 +6,7 @@ namespace SoapInterop\Tests\Wsse;
 
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
+use SoapInterop\Tests\Support\Wsse;
 use Soap\Psr18WsseMiddleware\WSSecurity\Algorithm\SignatureCanonicalization;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\KeyStore\Certificate;
@@ -25,18 +26,14 @@ final class CanonicalizationInteropTest extends InteropTestCase
 {
     public function test_php_inclusive_c14n_signature_is_accepted_by_wss4j(): void
     {
-        // Genuinely un-portable, not a PHP bug. The PHP middleware emits FULLY inclusive C14N: both the
-        // ds:SignedInfo CanonicalizationMethod AND every per-reference Transform are REC-xml-c14n-20010315.
-        // WSS4J's WSSecSignature only ever emits/validates a MIXED form (inclusive SignedInfo + EXCLUSIVE
-        // xml-exc-c14n# reference transforms); it round-trips its own mixed output but rejects a fully-inclusive
-        // reference digest over a detached SOAP Body (inherited-namespace handling differs). So WSS4J cannot
-        // verify a fully-inclusive PHP signature. The reverse direction (WSS4J's mixed form -> PHP) IS
-        // portable and is asserted by test_wss4j_inclusive_c14n_signature_is_accepted_by_php below.
-        self::markTestIncomplete(
-            'PHP->Java inclusive-C14N is not portable: PHP emits fully-inclusive reference transforms, '
-            . 'WSS4J only round-trips inclusive-SignedInfo + exclusive-reference-transforms (mixed). '
-            . 'WSS4J limitation, not a PHP defect; the Java->PHP inclusive direction is covered.',
-        );
+        // PHP emits fully-inclusive C14N (REC-xml-c14n-20010315) on both ds:SignedInfo and every per-reference
+        // Transform. disableBsp lets WSS4J accept the non-default reference transform alongside the BST keyref.
+        $signed = Wsse::sign(canonicalization: SignatureCanonicalization::C14N);
+
+        $response = Oracle::post('/verify?disableBsp=true', $signed);
+
+        self::assertSame(200, $response['status']);
+        self::assertJsonStringEqualsJsonString('{"valid":true}', $response['body']);
     }
 
     public function test_wss4j_inclusive_c14n_signature_is_accepted_by_php(): void
