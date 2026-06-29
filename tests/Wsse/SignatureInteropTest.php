@@ -11,7 +11,7 @@ use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use SoapInterop\Tests\Support\Wsse;
 use Soap\Psr18WsseMiddleware\WSSecurity\Algorithm\SignatureMethod;
-use Soap\Psr18WsseMiddleware\WSSecurity\Clock\Clock;
+use Soap\Psr18WsseMiddleware\Clock\Clock;
 use Soap\Psr18WsseMiddleware\WSSecurity\Exception\SecurityFault;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\KeyStore\Certificate;
