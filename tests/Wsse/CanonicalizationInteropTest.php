@@ -7,7 +7,7 @@ namespace SoapInterop\Tests\Wsse;
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use SoapInterop\Tests\Support\Wsse;
-use Soap\Psr18WsseMiddleware\WSSecurity\Algorithm\SignatureCanonicalization;
+use Soap\Psr18WsseMiddleware\Algorithm\SignatureCanonicalization;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;

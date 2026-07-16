@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace SoapInterop\Tests\Support;
 
-use Soap\Psr18WsseMiddleware\WSSecurity\Algorithm\KeyTransportAlgorithm;
-use Soap\Psr18WsseMiddleware\WSSecurity\Algorithm\SignatureCanonicalization;
-use Soap\Psr18WsseMiddleware\WSSecurity\Algorithm\SignatureMethod;
+use Soap\Psr18WsseMiddleware\Algorithm\KeyTransportAlgorithm;
+use Soap\Psr18WsseMiddleware\Algorithm\SignatureCanonicalization;
+use Soap\Psr18WsseMiddleware\Algorithm\SignatureMethod;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
@@ -65,7 +65,7 @@ final class Wsse
     public static function encrypt(
         string $recipientCertFile,
         Outbound\EncKeyRef $encKeyRef = Outbound\EncKeyRef::SubjectKeyIdentifier,
-        ?\Soap\Psr18WsseMiddleware\WSSecurity\Algorithm\DataEncryptionMethod $dataMethod = null,
+        ?\Soap\Psr18WsseMiddleware\Algorithm\DataEncryptionMethod $dataMethod = null,
         ?KeyTransportAlgorithm $keyTransport = null,
         ?string $inputXml = null,
     ): string {
