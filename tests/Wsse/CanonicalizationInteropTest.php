@@ -12,6 +12,7 @@ use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
+use Soap\Psr18WsseMiddleware\XmlSecurity\CryptoPolicy;
 use Soap\Psr18WsseMiddleware\WSSecurity\SoapVersion;
 use Soap\Psr18WsseMiddleware\KeyStore\TrustStore;
 use Soap\Psr18WsseMiddleware\WSSecurity\WsseContext;
@@ -41,12 +42,12 @@ final class CanonicalizationInteropTest extends InteropTestCase
         $javaSigned = Oracle::post('/sign?c14n=INCLUSIVE&disableBsp=true', Oracle::sampleEnvelope())['body'];
 
         // The PHP verifier accepts inclusive canonicalization only when the profile opts in.
-        $profile = new SecurityProfile(acceptedCanonicalizations: [
+        $profile = new SecurityProfile(crypto: new CryptoPolicy(acceptedCanonicalizations: [
             SignatureCanonicalization::C14N,
             SignatureCanonicalization::C14N_COMMENTS,
             SignatureCanonicalization::EXC_C14N,
             SignatureCanonicalization::EXC_C14N_COMMENTS,
-        ]);
+        ]));
         $document = Document::fromXmlString($javaSigned);
         $context = new WsseContext($document, SoapVersion::Soap12, $profile);
         $trust = TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('ca.crt')));
