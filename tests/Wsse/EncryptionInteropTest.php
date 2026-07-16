@@ -112,7 +112,7 @@ final class EncryptionInteropTest extends InteropTestCase
     {
         $encrypted = Wsse::encrypt(
             recipientCertFile: Oracle::certPath('java-server.crt'),
-            encKeyRef: Outbound\EncKeyRef::IssuerSerial,
+            encKeyRef: Outbound\KeyReference\EncKeyRef::IssuerSerial,
         );
 
         $response = Oracle::post('/decrypt', $encrypted);

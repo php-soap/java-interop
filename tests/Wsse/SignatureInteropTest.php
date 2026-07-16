@@ -78,19 +78,19 @@ final class SignatureInteropTest extends InteropTestCase
     }
 
     /**
-     * @return iterable<string, array{Outbound\KeyRef, string}>
+     * @return iterable<string, array{Outbound\KeyReference\KeyRef, string}>
      */
     public static function phpKeyRefProvider(): iterable
     {
         // keyref => verify keystore hint param. BST/SKI resolve from the recipients keystore (holds php-client);
         // IssuerSerial also resolves there because the php-client cert is present.
-        yield 'BinarySecurityToken' => [Outbound\KeyRef::BinarySecurityToken, ''];
-        yield 'SubjectKeyIdentifier' => [Outbound\KeyRef::SubjectKeyIdentifier, ''];
-        yield 'IssuerSerial' => [Outbound\KeyRef::IssuerSerial, '?disableBsp=true'];
+        yield 'BinarySecurityToken' => [Outbound\KeyReference\KeyRef::BinarySecurityToken, ''];
+        yield 'SubjectKeyIdentifier' => [Outbound\KeyReference\KeyRef::SubjectKeyIdentifier, ''];
+        yield 'IssuerSerial' => [Outbound\KeyReference\KeyRef::IssuerSerial, '?disableBsp=true'];
     }
 
     #[DataProvider('phpKeyRefProvider')]
-    public function test_php_signed_keyref_is_accepted_by_wss4j(Outbound\KeyRef $keyRef, string $query): void
+    public function test_php_signed_keyref_is_accepted_by_wss4j(Outbound\KeyReference\KeyRef $keyRef, string $query): void
     {
         $signed = Wsse::sign(keyRef: $keyRef);
 

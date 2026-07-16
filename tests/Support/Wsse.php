@@ -31,7 +31,7 @@ final class Wsse
      */
     public static function sign(
         ?SoapVersion $soapVersion = null,
-        Outbound\KeyRef $keyRef = Outbound\KeyRef::BinarySecurityToken,
+        Outbound\KeyReference\KeyRef $keyRef = Outbound\KeyReference\KeyRef::BinarySecurityToken,
         ?SignatureMethod $signatureMethod = null,
         ?SignatureCanonicalization $canonicalization = null,
         ?string $clientCertFile = null,
@@ -64,7 +64,7 @@ final class Wsse
     /** Encrypt the sample Body to the given recipient cert and return the encrypted XML. */
     public static function encrypt(
         string $recipientCertFile,
-        Outbound\EncKeyRef $encKeyRef = Outbound\EncKeyRef::SubjectKeyIdentifier,
+        Outbound\KeyReference\EncKeyRef $encKeyRef = Outbound\KeyReference\EncKeyRef::SubjectKeyIdentifier,
         ?\Soap\Psr18WsseMiddleware\Algorithm\DataEncryptionMethod $dataMethod = null,
         ?KeyTransportAlgorithm $keyTransport = null,
         ?string $inputXml = null,
