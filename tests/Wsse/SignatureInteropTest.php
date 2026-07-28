@@ -87,6 +87,10 @@ final class SignatureInteropTest extends InteropTestCase
         yield 'BinarySecurityToken' => [Outbound\KeyReference\KeyRef::BinarySecurityToken, ''];
         yield 'SubjectKeyIdentifier' => [Outbound\KeyReference\KeyRef::SubjectKeyIdentifier, ''];
         yield 'IssuerSerial' => [Outbound\KeyReference\KeyRef::IssuerSerial, '?disableBsp=true'];
+        // Thumbprint resolves from the recipients keystore too. This row exists because the PHP side once
+        // emitted the KeyIdentifier in the WSS 1.1 namespace, which no conformant peer resolves: only a
+        // PHP-outbound row catches that, since the PHP reader accepts either namespace on the way in.
+        yield 'Thumbprint' => [Outbound\KeyReference\KeyRef::Thumbprint, ''];
     }
 
     #[DataProvider('phpKeyRefProvider')]
@@ -133,6 +137,7 @@ final class SignatureInteropTest extends InteropTestCase
         yield 'BinarySecurityToken' => ['BinarySecurityToken'];
         yield 'SubjectKeyIdentifier' => ['SubjectKeyIdentifier'];
         yield 'IssuerSerial' => ['IssuerSerial'];
+        yield 'Thumbprint' => ['Thumbprint'];
     }
 
     #[DataProvider('javaKeyRefProvider')]
