@@ -38,6 +38,7 @@ final class Wsse
         ?array $parts = null,
         ?string $inputXml = null,
         int $timestampTtl = 300,
+        bool $inclusivePrefixes = false,
     ): string {
         $soapVersion ??= SoapVersion::Soap12;
         $document = Document::fromXmlString($inputXml ?? Oracle::sampleEnvelope());
@@ -55,6 +56,9 @@ final class Wsse
         }
         if ($parts !== null) {
             $signature = $signature->withParts($parts);
+        }
+        if ($inclusivePrefixes) {
+            $signature = $signature->withInclusivePrefixes();
         }
         $signature($context);
 

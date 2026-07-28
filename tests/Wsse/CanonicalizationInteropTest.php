@@ -37,6 +37,24 @@ final class CanonicalizationInteropTest extends InteropTestCase
         self::assertJsonStringEqualsJsonString('{"valid":true}', $response['body']);
     }
 
+    /**
+     * The outbound half of the InclusiveNamespaces feature. A PHP round trip cannot prove this: our own reader
+     * honours whatever PrefixList it is handed, so only a conformant peer re-canonicalizing from the
+     * declaration can tell us the pinned list and the digests actually agree.
+     */
+    public function test_php_signature_pinning_inclusive_prefixes_is_accepted_by_wss4j(): void
+    {
+        $signed = Wsse::sign(inclusivePrefixes: true);
+
+        self::assertStringContainsString('InclusiveNamespaces', $signed);
+        self::assertStringContainsString('PrefixList=', $signed);
+
+        $response = Oracle::post('/verify', $signed);
+
+        self::assertSame(200, $response['status']);
+        self::assertJsonStringEqualsJsonString('{"valid":true}', $response['body']);
+    }
+
     public function test_wss4j_inclusive_c14n_signature_is_accepted_by_php(): void
     {
         $javaSigned = Oracle::post('/sign?c14n=INCLUSIVE&disableBsp=true', Oracle::sampleEnvelope())['body'];
