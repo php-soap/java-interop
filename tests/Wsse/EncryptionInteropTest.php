@@ -65,6 +65,28 @@ final class EncryptionInteropTest extends InteropTestCase
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $document->toXmlString());
     }
 
+    public function test_wss4j_encrypted_with_legacy_mgf1p_and_sha256_is_decrypted_by_php(): void
+    {
+        // rsa-oaep-mgf1p fixes the mask to MGF1-SHA1, but ds:DigestMethod still sets the OAEP label hash, so
+        // WSS4J emits this URI with a SHA-256 digest and no MGF child. PHP used to require the digest to be
+        // SHA-1 under this URI and so could not decrypt the message at all.
+        $encrypted = Oracle::post('/encrypt?enckey=RSA_OAEP_MGF1P&oaep=SHA256', Oracle::sampleEnvelope())['body'];
+
+        self::assertStringContainsString('rsa-oaep-mgf1p', $encrypted);
+        self::assertStringContainsString('xmlenc#sha256', $encrypted);
+
+        $document = Document::fromXmlString($encrypted);
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+
+        try {
+            (new Inbound\Decrypt(Key::fromFile(Oracle::certPath('php-client.key'))))($context);
+        } catch (SecurityFault $fault) {
+            self::fail('PHP failed to decrypt a WSS4J mgf1p/SHA256 message: ' . $fault->getMessage());
+        }
+
+        self::assertStringContainsString(self::PLAINTEXT_MARKER, $document->toXmlString());
+    }
+
     public function test_wss4j_encrypted_with_issuerserial_recipient_is_decrypted_by_php(): void
     {
         // Recipient resolved by IssuerSerial instead of SKI; PHP must still decrypt with its private key.
