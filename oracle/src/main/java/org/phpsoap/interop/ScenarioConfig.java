@@ -35,6 +35,14 @@ public final class ScenarioConfig {
     public String signatureAlgorithm = "RSA_SHA256";
 
     /**
+     * When true the signer puts the whole certification path in the wsse:BinarySecurityToken as an
+     * ASN.1 SEQUENCE OF Certificate (#X509PKIPathv1) instead of the leaf certificate alone
+     * (#X509v3), which is WSS4J's setUseSingleCertificate(false). Mirrors the PHP
+     * Outbound\Signature::withCertificatePath() opt-in so both emitters can be cross-tested.
+     */
+    public boolean signatureCertificatePath = false;
+
+    /**
      * Keystore alias the signer uses. Defaults to the RSA java-server key; the ECDSA-SHA256 rows select the
      * EC leaf (ec-client) so the signature algorithm and key type agree.
      */
@@ -100,6 +108,8 @@ public final class ScenarioConfig {
                 props.getProperty("signature.keyReference", config.signatureKeyReference).trim();
         config.signatureAlgorithm =
                 props.getProperty("signature.algorithm", config.signatureAlgorithm).trim();
+        config.signatureCertificatePath =
+                boolProp(props, "signature.certificatePath", config.signatureCertificatePath);
         config.canonicalization =
                 props.getProperty("signature.canonicalization", config.canonicalization).trim();
         config.dataEncryptionAlgorithm =

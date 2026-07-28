@@ -233,7 +233,7 @@ public final class OracleServer {
     /**
      * Builds a per-request {@link ScenarioConfig} from query parameters, defaulting to the matrix happy
      * flow. Recognised params mirror the CLI config keys, e.g.
-     * {@code ?keyref=SubjectKeyIdentifier&sigalg=RSA_SHA512&encdata=AES256_CBC&enckey=RSA_OAEP&oaep=SHA256
+     * {@code ?keyref=SubjectKeyIdentifier&sigalg=RSA_SHA512&certpath=true&encdata=AES256_CBC&enckey=RSA_OAEP&oaep=SHA256
      * &c14n=INCLUSIVE&disableBsp=true&ts=false}.
      */
     private static ScenarioConfig configFrom(URI uri) {
@@ -244,6 +244,9 @@ public final class OracleServer {
         }
         if (q.containsKey("sigalg")) {
             config.signatureAlgorithm = q.get("sigalg");
+        }
+        if (q.containsKey("certpath")) {
+            config.signatureCertificatePath = Boolean.parseBoolean(q.get("certpath"));
         }
         if (q.containsKey("sigalias")) {
             config.signatureKeyAlias = q.get("sigalias");

@@ -9,6 +9,7 @@ use Soap\Psr18WsseMiddleware\Algorithm\SignatureCanonicalization;
 use Soap\Psr18WsseMiddleware\Algorithm\SignatureMethod;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
+use Soap\Psr18WsseMiddleware\KeyStore\Pkcs12Bundle;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
@@ -28,6 +29,7 @@ final class Wsse
      * Sign the sample with the given knobs and return the signed XML.
      *
      * @param list<Part>|null $parts override the signed parts (default Body + Timestamp)
+     * @param bool $certificatePath advertise the whole certification path as a #X509PKIPathv1 token
      */
     public static function sign(
         ?SoapVersion $soapVersion = null,
@@ -39,11 +41,17 @@ final class Wsse
         ?string $inputXml = null,
         int $timestampTtl = 300,
         bool $inclusivePrefixes = false,
+        bool $certificatePath = false,
     ): string {
         $soapVersion ??= SoapVersion::Soap12;
         $document = Document::fromXmlString($inputXml ?? Oracle::sampleEnvelope());
         $context = new WsseContext($document, $soapVersion, new SecurityProfile());
-        $clientCertificate = ClientCertificate::fromFile($clientCertFile ?? Oracle::certPath('php-client.pem'));
+        // A certificate path comes from the PKCS#12 bundle, which is the only shipped material that carries the
+        // CA alongside the leaf; the PEM signing identity has no chain to offer.
+        $bundle = $certificatePath ? Pkcs12Bundle::fromFile(Oracle::certPath('php-client.p12'), 'changeit') : null;
+        $clientCertificate = $bundle !== null
+            ? ClientCertificate::fromPkcs12($bundle)
+            : ClientCertificate::fromFile($clientCertFile ?? Oracle::certPath('php-client.pem'));
 
         (new Outbound\Timestamp($timestampTtl))($context);
 
@@ -59,6 +67,9 @@ final class Wsse
         }
         if ($inclusivePrefixes) {
             $signature = $signature->withInclusivePrefixes();
+        }
+        if ($bundle !== null) {
+            $signature = $signature->withCertificatePath($bundle->chain);
         }
         $signature($context);
 

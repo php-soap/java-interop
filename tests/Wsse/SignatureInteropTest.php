@@ -43,6 +43,20 @@ final class SignatureInteropTest extends InteropTestCase
         self::assertJsonStringEqualsJsonString('{"valid":true}', $response['body']);
     }
 
+    public function test_php_signed_certificate_path_is_accepted_by_wss4j(): void
+    {
+        // The BinarySecurityToken carries the leaf and the CA as one ASN.1 SEQUENCE OF Certificate
+        // (#X509PKIPathv1) instead of the leaf alone. This row is what settles the byte order: our own reader
+        // derives the end-entity from issuer linkage and so accepts either direction, while WSS4J refuses a
+        // leaf-first path outright ("CA key usage check failed: keyCertSign bit is not set" -- it reads the
+        // first certificate as the issuer). Anchor first, as ITU-T X.509 defines a PkiPath, is what passes.
+        $signed = Wsse::sign(certificatePath: true);
+
+        $response = Oracle::post('/verify', $signed);
+
+        self::assertValid($response, 'WSS4J should verify a PHP signature advertising a certification path');
+    }
+
     public function test_php_signed_soap11_is_accepted_by_wss4j(): void
     {
         $signed = Wsse::sign(
@@ -127,6 +141,18 @@ final class SignatureInteropTest extends InteropTestCase
         $javaSigned = Oracle::post('/sign?sigalg=ECDSA_SHA256&sigalias=ec-client', Oracle::sampleEnvelope())['body'];
 
         $this->phpVerify($javaSigned, [Part::body(), Part::timestamp()]);
+    }
+
+    public function test_wss4j_signed_certificate_path_is_accepted_by_php(): void
+    {
+        // WSS4J's own path emitter (setUseSingleCertificate(false)), so the inbound half is validated against a
+        // real peer's encoder rather than only against ours. It writes the order we write: the CA first, then
+        // the java-server leaf.
+        $javaSigned = Oracle::post('/sign?certpath=true', Oracle::sampleEnvelope())['body'];
+
+        $this->phpVerify($javaSigned, [Part::body(), Part::timestamp()]);
+
+        self::assertStringContainsString('X509PKIPathv1', $javaSigned);
     }
 
     /**

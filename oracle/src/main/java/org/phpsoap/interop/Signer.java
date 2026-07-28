@@ -72,6 +72,9 @@ final class Signer {
             signature.setSignatureAlgorithm(signatureAlgorithm(config.signatureAlgorithm));
             signature.setDigestAlgo(WSConstants.SHA256);
             signature.setSigCanonicalization(canonicalizationUri(config.canonicalization));
+            // A path token carries the leaf plus the CA certificates from the keystore entry, so a peer that
+            // will not complete the chain itself gets the intermediates handed to it.
+            signature.setUseSingleCertificate(!config.signatureCertificatePath);
 
             signature.getParts().add(
                     new WSEncryptionPart(WSConstants.ELEM_BODY, soapNamespace(document), "Content"));
