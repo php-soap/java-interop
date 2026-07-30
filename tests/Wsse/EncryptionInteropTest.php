@@ -9,6 +9,8 @@ use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use SoapInterop\Tests\Support\Wsse;
 use Soap\Psr18WsseMiddleware\Algorithm\DataEncryptionMethod;
+use Soap\Psr18WsseMiddleware\Algorithm\KeyEncryptionMethod;
+use Soap\Psr18WsseMiddleware\Algorithm\OaepHash;
 use Soap\Psr18WsseMiddleware\Algorithm\KeyTransportAlgorithm;
 use Soap\Psr18WsseMiddleware\WSSecurity\Exception\SecurityFault;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
@@ -109,6 +111,30 @@ final class EncryptionInteropTest extends InteropTestCase
         yield 'AES-256-GCM, OAEP-SHA1' => [DataEncryptionMethod::AES256_GCM, KeyTransportAlgorithm::oaepSha1()];
         yield 'AES-256-CBC, OAEP-SHA1' => [DataEncryptionMethod::AES256_CBC, KeyTransportAlgorithm::oaepSha1()];
         yield 'AES-256-GCM, OAEP-SHA256' => [DataEncryptionMethod::AES256_GCM, KeyTransportAlgorithm::oaepSha256()];
+        yield 'AES-256-GCM, mgf1p with a SHA-1 label' => [DataEncryptionMethod::AES256_GCM, KeyTransportAlgorithm::legacyMgf1p()];
+    }
+
+    /**
+     * The mirror of the inbound mgf1p row. That URI fixes the mask to MGF1-SHA1 while ds:DigestMethod still
+     * sets the label hash, and a SHA-256 label under it is what WSS4J emits. Only a PHP-outbound row catches
+     * getting the shape wrong: our own reader accepts either spelling, so a round trip stays green regardless.
+     */
+    public function test_php_encrypted_with_legacy_mgf1p_and_sha256_is_decrypted_by_wss4j(): void
+    {
+        $encrypted = Wsse::encrypt(
+            recipientCertFile: Oracle::certPath('java-server.crt'),
+            keyTransport: KeyTransportAlgorithm::fromMethod(KeyEncryptionMethod::RSA_OAEP_MGF1P, OaepHash::Sha256),
+        );
+
+        self::assertStringContainsString('rsa-oaep-mgf1p', $encrypted);
+        self::assertStringContainsString('xmlenc#sha256', $encrypted);
+        // The legacy URI takes no xenc11:MGF child at all; emitting one is what a strict peer refuses.
+        self::assertStringNotContainsString('MGF', $encrypted);
+
+        $response = Oracle::post('/decrypt', $encrypted);
+
+        self::assertSame(200, $response['status'], 'oracle should decrypt mgf1p with a SHA-256 label: ' . $response['body']);
+        self::assertStringContainsString(self::PLAINTEXT_MARKER, $response['body']);
     }
 
     #[DataProvider('phpEncDataProvider')]
