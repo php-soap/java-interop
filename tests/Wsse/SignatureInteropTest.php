@@ -129,6 +129,39 @@ final class SignatureInteropTest extends InteropTestCase
         self::assertStringContainsString('hello from the interop harness', $javaSigned);
     }
 
+    /**
+     * The default coverage requirement against a real peer. WSS4J signs the Body and the Timestamp and leaves
+     * its own BinarySecurityToken unsigned, which is why the default stops at the Body: requiring the whole
+     * Security header contents would refuse this message.
+     */
+    public function test_wss4j_signed_happy_flow_is_accepted_by_php_with_the_default_coverage(): void
+    {
+        $javaSigned = Oracle::post('/sign', Oracle::sampleEnvelope())['body'];
+
+        $document = Document::fromXmlString($javaSigned);
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $trust = TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('ca.crt')));
+
+        (new Inbound\VerifySignature($trust))($context);
+
+        self::assertStringContainsString('hello from the interop harness', $javaSigned);
+    }
+
+    /**
+     * The control for the row above: requiring the Security header contents refuses the same message, because
+     * WSS4J does not sign its own BinarySecurityToken.
+     */
+    public function test_wss4j_signed_happy_flow_is_refused_when_the_header_contents_are_required(): void
+    {
+        $javaSigned = Oracle::post('/sign', Oracle::sampleEnvelope())['body'];
+
+        self::assertPhpRejects(
+            $javaSigned,
+            [Part::body(), Part::securityHeaderContents()],
+            TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('ca.crt'))),
+        );
+    }
+
     public function test_wss4j_signed_rsa_sha512_is_accepted_by_php(): void
     {
         $javaSigned = Oracle::post('/sign?sigalg=RSA_SHA512', Oracle::sampleEnvelope())['body'];
