@@ -9,6 +9,7 @@ use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use SoapInterop\Tests\Support\Wsse;
 use Soap\Psr18WsseMiddleware\Algorithm\DataEncryptionMethod;
+use Soap\Psr18WsseMiddleware\XmlSecurity\CryptoPolicy;
 use Soap\Psr18WsseMiddleware\Algorithm\KeyEncryptionMethod;
 use Soap\Psr18WsseMiddleware\Algorithm\OaepHash;
 use Soap\Psr18WsseMiddleware\Algorithm\KeyTransportAlgorithm;
@@ -35,18 +36,23 @@ final class EncryptionInteropTest extends InteropTestCase
     // ----------------------------------------------------------------- Java -> PHP
 
     /**
-     * @return iterable<string, array{string, string}>
+     * @return iterable<string, array{string, string, list<DataEncryptionMethod>|null}>
      */
     public static function javaEncDataProvider(): iterable
     {
-        // encdata param => oaep param
-        yield 'AES-256-GCM, OAEP-SHA1' => ['AES256_GCM', 'SHA1'];
-        yield 'AES-256-CBC, OAEP-SHA1' => ['AES256_CBC', 'SHA1'];
-        yield 'AES-256-GCM, OAEP-SHA256' => ['AES256_GCM', 'SHA256'];
+        // encdata param => oaep param => the ciphers the receiving policy accepts (null = secure defaults)
+        yield 'AES-256-GCM, OAEP-SHA1' => ['AES256_GCM', 'SHA1', null];
+        yield 'AES-256-GCM, OAEP-SHA256' => ['AES256_GCM', 'SHA256', null];
+        // CBC is not accepted by default: a peer that can only send it has to be named. This row is what proves
+        // the opt-in reaches a real WSS4J-encrypted message rather than only our own.
+        yield 'AES-256-CBC, OAEP-SHA1, opted in' => ['AES256_CBC', 'SHA1', [DataEncryptionMethod::AES256_CBC]];
     }
 
+    /**
+     * @param list<DataEncryptionMethod>|null $acceptedCiphers
+     */
     #[DataProvider('javaEncDataProvider')]
-    public function test_wss4j_encrypted_message_is_decrypted_by_php(string $encData, string $oaep): void
+    public function test_wss4j_encrypted_message_is_decrypted_by_php(string $encData, string $oaep, ?array $acceptedCiphers): void
     {
         $encrypted = Oracle::post(
             sprintf('/encrypt?encdata=%s&oaep=%s', $encData, $oaep),
@@ -56,7 +62,8 @@ final class EncryptionInteropTest extends InteropTestCase
         self::assertStringContainsString('EncryptedData', $encrypted);
 
         $document = Document::fromXmlString($encrypted);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $profile = new SecurityProfile(crypto: new CryptoPolicy(acceptedDataEncryptionMethods: $acceptedCiphers));
+        $context = new WsseContext($document, SoapVersion::Soap12, $profile);
 
         try {
             (new Inbound\Decrypt(Key::fromFile(Oracle::certPath('php-client.key'))))($context);
@@ -65,6 +72,20 @@ final class EncryptionInteropTest extends InteropTestCase
         }
 
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $document->toXmlString());
+    }
+
+    /**
+     * The control for the opted-in CBC row: under the secure defaults the very same WSS4J message is refused.
+     */
+    public function test_wss4j_cbc_encrypted_message_is_refused_under_the_default_policy(): void
+    {
+        $encrypted = Oracle::post('/encrypt?encdata=AES256_CBC&oaep=SHA1', Oracle::sampleEnvelope())['body'];
+
+        $document = Document::fromXmlString($encrypted);
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+
+        $this->expectException(SecurityFault::class);
+        (new Inbound\Decrypt(Key::fromFile(Oracle::certPath('php-client.key'))))($context);
     }
 
     public function test_wss4j_encrypted_with_legacy_mgf1p_and_sha256_is_decrypted_by_php(): void
