@@ -6,7 +6,9 @@ namespace SoapInterop\Tests\Wsse;
 
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
+use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
+use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
 use Soap\Psr18WsseMiddleware\WSSecurity\SoapVersion;
 use Soap\Psr18WsseMiddleware\WSSecurity\WsseContext;
@@ -35,6 +37,26 @@ final class UsernameTokenInteropTest extends InteropTestCase
         $response = Oracle::post('/verify?ut=true&sig=false&ts=false&user=interop-user&pass=interop-secret', $message);
 
         self::assertValid($response, 'WSS4J should validate a PasswordDigest UsernameToken');
+    }
+
+    /**
+     * A signed UsernameToken must reach WSS4J before the ds:Signature that references it: the receiver
+     * processes the header top-down and cannot resolve a reference to a token it has not read yet.
+     */
+    public function test_php_signed_username_token_is_accepted_by_wss4j(): void
+    {
+        $document = Document::fromXmlString(Oracle::sampleEnvelope());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+
+        (new Outbound\Timestamp())($context);
+        (new Outbound\Username('interop-user', 'interop-secret', false))($context);
+        (new Outbound\Signature(
+            ClientCertificate::fromFile(Oracle::certPath('php-client.pem')),
+        ))->withParts([Part::body(), Part::timestamp(), Part::usernameToken()])($context);
+
+        $response = Oracle::post('/verify?ut=true&user=interop-user&pass=interop-secret', $document->toXmlString());
+
+        self::assertValid($response, 'WSS4J should validate a signed UsernameToken');
     }
 
     private function phpUsername(bool $digest): string
