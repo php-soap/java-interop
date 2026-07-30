@@ -15,6 +15,7 @@ use Soap\Psr18WsseMiddleware\Clock\Clock;
 use Soap\Psr18WsseMiddleware\WSSecurity\Exception\SecurityFault;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
+use Soap\Psr18WsseMiddleware\KeyStore\TrustedSigner;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
@@ -243,6 +244,67 @@ final class SignatureInteropTest extends InteropTestCase
         $wrapped = Wsse::wrapBody(Oracle::post('/sign', Oracle::sampleEnvelope())['body']);
 
         self::assertPhpRejects($wrapped, [Part::body(), Part::timestamp()]);
+    }
+
+    /**
+     * Pinning the peer's own CA-issued certificate rather than its issuer. OpenSSL cannot build a path that
+     * ends at a CA-issued certificate, so this only works because a store entry matching the presented
+     * certificate is honoured directly.
+     */
+    public function test_wss4j_signed_message_is_accepted_by_php_against_a_pinned_leaf(): void
+    {
+        $javaSigned = Oracle::post('/sign', Oracle::sampleEnvelope())['body'];
+
+        $this->phpVerify(
+            $javaSigned,
+            [Part::body(), Part::timestamp()],
+            TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('java-server.crt'))),
+        );
+    }
+
+    /**
+     * The finding a pin exists for: ec-client is a different certificate the same CA issued, so anchoring the
+     * CA accepts it as readily as the real peer. Pinning the peer's certificate is what tells them apart.
+     */
+    public function test_a_sibling_certificate_from_the_same_ca_is_refused_against_a_pinned_leaf(): void
+    {
+        $siblingSigned = Oracle::post('/sign?sigalg=ECDSA_SHA256&sigalias=ec-client', Oracle::sampleEnvelope())['body'];
+
+        // Anchoring the CA accepts it: the certificate is validly issued, it is simply not the peer.
+        $this->phpVerify(
+            $siblingSigned,
+            [Part::body(), Part::timestamp()],
+            TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('ca.crt'))),
+        );
+
+        self::assertPhpRejects(
+            $siblingSigned,
+            [Part::body(), Part::timestamp()],
+            TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('java-server.crt'))),
+        );
+    }
+
+    /**
+     * The same finding closed the other way, with the CA still anchored: the application names the identity it
+     * expected and the sibling is refused.
+     */
+    public function test_a_sibling_certificate_is_refused_by_an_expected_signer_check(): void
+    {
+        $siblingSigned = Oracle::post('/sign?sigalg=ECDSA_SHA256&sigalias=ec-client', Oracle::sampleEnvelope())['body'];
+
+        $document = Document::fromXmlString($siblingSigned);
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $block = (new Inbound\VerifySignature(
+            TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('ca.crt'))),
+            signed: [Part::body(), Part::timestamp()],
+        ))->onTrustedSigner(static function (TrustedSigner $signer): void {
+            if (!str_contains($signer->subjectDistinguishedName()->toString(), 'java-server')) {
+                throw new \RuntimeException('not the expected peer');
+            }
+        });
+
+        $this->expectException(SecurityFault::class);
+        $block($context);
     }
 
     public function test_untrusted_php_signer_is_rejected_by_wss4j(): void
