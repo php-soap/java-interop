@@ -1,6 +1,7 @@
 package org.phpsoap.interop;
 
 import org.apache.wss4j.common.crypto.Crypto;
+import org.apache.wss4j.common.saml.SamlAssertionWrapper;
 import org.apache.wss4j.dom.WSConstants;
 import org.apache.wss4j.dom.engine.WSSecurityEngine;
 import org.apache.wss4j.dom.engine.WSSecurityEngineResult;
@@ -53,6 +54,8 @@ final class Verifier {
         boolean sawTimestamp = false;
         boolean sawEncryption = false;
         boolean sawUsernameToken = false;
+        boolean sawSamlAssertion = false;
+        boolean samlHolderOfKey = false;
         String signerSubject = null;
 
         for (WSSecurityEngineResult result : results) {
@@ -77,6 +80,16 @@ final class Verifier {
             if (action == WSConstants.UT || action == WSConstants.UT_NOPASSWORD) {
                 sawUsernameToken = true;
             }
+            // ST_SIGNED is an assertion whose own signature verified against the trust store; ST_UNSIGNED is one
+            // that carried none. Only the former can vouch for a key, so the two are tracked apart.
+            if (action == WSConstants.ST_SIGNED || action == WSConstants.ST_UNSIGNED) {
+                sawSamlAssertion = true;
+                Object token = result.get(WSSecurityEngineResult.TAG_SAML_ASSERTION);
+                if (action == WSConstants.ST_SIGNED && token instanceof SamlAssertionWrapper assertion) {
+                    samlHolderOfKey = assertion.getConfirmationMethods().stream()
+                            .anyMatch(method -> method != null && method.contains("holder-of-key"));
+                }
+            }
         }
 
         if (config.requireSignature && !sawSignature) {
@@ -90,6 +103,17 @@ final class Verifier {
         }
         if (config.requireUsernameToken && !sawUsernameToken) {
             problems.add("required UsernameToken is missing (no wsse:UsernameToken processed)");
+        }
+        if (config.requireSaml && !sawSamlAssertion) {
+            problems.add("required SAML assertion is missing (no saml:Assertion processed)");
+        }
+        // The point of Holder-of-Key is that the signature was made with the key the assertion vouches for.
+        // WSS4J proves that by resolving the signing key THROUGH the assertion, so a signature that verified
+        // beside a holder-of-key assertion is the binding; an assertion present but not confirming holder-of-key
+        // means the reference was decorative and the signer was trusted on some other ground.
+        if (config.requireSamlHolderOfKey && !samlHolderOfKey) {
+            problems.add("required SAML Holder-of-Key confirmation is missing "
+                    + "(no signed assertion with a holder-of-key subject confirmation)");
         }
 
         return new Result(problems.isEmpty(), problems, sawSignature, sawTimestamp, signerSubject, results.size());

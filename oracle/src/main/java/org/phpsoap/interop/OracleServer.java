@@ -70,6 +70,7 @@ public final class OracleServer {
         http.createContext("/verify", server.opHandler(server::verify));
         http.createContext("/encrypt", server.opHandler(server::encrypt));
         http.createContext("/decrypt", server.opHandler(server::decrypt));
+        http.createContext("/saml/issue", server.opHandler(server::issueSamlAssertion));
         http.createContext("/attach", server::handleAttach);
         http.setExecutor(java.util.concurrent.Executors.newFixedThreadPool(8));
         http.start();
@@ -124,6 +125,19 @@ public final class OracleServer {
         } else {
             respond(exchange, 200, "application/json", json(false, String.join("; ", result.problems)));
         }
+    }
+
+    /**
+     * Stands in for the STS: hands out a Holder-of-Key assertion bound to the current run's PHP client
+     * certificate. The body is ignored; everything the assertion needs comes from the keystore and the query.
+     */
+    private void issueSamlAssertion(HttpExchange exchange, String body, ScenarioConfig config) throws Exception {
+        String assertion = new SamlIssuer(crypto).issue(
+                config.samlHolderAlias,
+                config.samlIssuerAlias,
+                STOREPASS,
+                config.samlSignAssertion);
+        respond(exchange, 200, "text/xml; charset=UTF-8", assertion);
     }
 
     private void encrypt(HttpExchange exchange, String body, ScenarioConfig config) throws Exception {
@@ -271,6 +285,18 @@ public final class OracleServer {
         }
         if (q.containsKey("sig")) {
             config.requireSignature = Boolean.parseBoolean(q.get("sig"));
+        }
+        if (q.containsKey("saml")) {
+            config.requireSaml = Boolean.parseBoolean(q.get("saml"));
+        }
+        if (q.containsKey("samlhok")) {
+            config.requireSamlHolderOfKey = Boolean.parseBoolean(q.get("samlhok"));
+        }
+        if (q.containsKey("samlholder")) {
+            config.samlHolderAlias = q.get("samlholder");
+        }
+        if (q.containsKey("samlsign")) {
+            config.samlSignAssertion = Boolean.parseBoolean(q.get("samlsign"));
         }
         if (q.containsKey("c14n")) {
             config.canonicalization = q.get("c14n");

@@ -17,7 +17,23 @@ public final class ScenarioConfig {
 
     public boolean requireEncryption = false;   // enforce/produce xenc:EncryptedData over the Body
     public boolean requireUsernameToken = false; // enforce/produce wsse:UsernameToken
-    public boolean requireSaml = false;          // TODO: enforce/produce a SAML assertion
+    public boolean requireSaml = false;          // enforce/produce a saml:Assertion in the Security header
+
+    /**
+     * Enforce that the signature was made with the key a signed SAML assertion vouches for, rather than merely
+     * that an assertion is present. This is the Holder-of-Key binding itself: without it a message could carry
+     * an assertion the signature has nothing to do with and still verify.
+     */
+    public boolean requireSamlHolderOfKey = false;
+
+    /** Keystore alias whose key a issued Holder-of-Key assertion vouches for. The PHP side holds this one. */
+    public String samlHolderAlias = "php-client";
+
+    /** Keystore alias an issued assertion is signed with. Must chain to the CA both peers trust. */
+    public String samlIssuerAlias = "java-server";
+
+    /** When false the issued assertion carries no signature, which is the refusal case. */
+    public boolean samlSignAssertion = true;
 
     /** Maximum age (seconds) a Created timestamp may have. Mirrors the PHP clockSkew/ttl window. */
     public int timestampTimeToLiveSeconds = 300;
