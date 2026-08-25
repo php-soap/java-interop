@@ -298,7 +298,8 @@ public final class OracleServer {
                         + ",\"signature\":" + result.sawSignature
                         + ",\"encryption\":" + result.sawEncryption
                         + ",\"sha256\":" + shas
-                        + ",\"rawSha256\":" + rawShas + "}");
+                        + ",\"rawSha256\":" + rawShas
+                        + ",\"headerBlocks\":" + jsonStringArray(result.attachmentHeaderBlocks) + "}");
     }
 
     /** The SOAP envelope the emit op wraps: a plain Body for SwA, one carrying an xop:Include for MTOM. */
@@ -353,6 +354,12 @@ public final class OracleServer {
         }
         if (q.containsKey("encatt")) {
             config.encryptAttachments = Boolean.parseBoolean(q.get("encatt"));
+        }
+        if (q.containsKey("signcover")) {
+            config.attachmentSignatureCoverage = q.get("signcover");
+        }
+        if (q.containsKey("enccover")) {
+            config.attachmentEncryptionCoverage = q.get("enccover");
         }
         if (q.containsKey("sigalg")) {
             config.signatureAlgorithm = q.get("sigalg");
@@ -468,12 +475,18 @@ public final class OracleServer {
     private static String escapeJson(String s) {
         String escaped = s.replace("\\", "\\\\").replace("\"", "\\\"");
 
-        // Any remaining control character, a tab in a folded MIME header among them, is a parse error for a
-        // strict JSON reader rather than something it tolerates.
+        // A control character is a parse error for a strict JSON reader rather than something it tolerates.
+        // Escaped rather than replaced: a canonical MIME header block is CRLF-separated, and flattening those
+        // would report a block no reader could compare against the one the far side composed.
         StringBuilder out = new StringBuilder(escaped.length());
         for (int i = 0; i < escaped.length(); i++) {
             char c = escaped.charAt(i);
-            out.append(c < 0x20 ? ' ' : c);
+            switch (c) {
+                case '\r' -> out.append("\\r");
+                case '\n' -> out.append("\\n");
+                case '\t' -> out.append("\\t");
+                default -> out.append(c < 0x20 ? ' ' : c);
+            }
         }
 
         return out.toString();

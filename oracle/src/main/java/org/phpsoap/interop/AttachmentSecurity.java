@@ -8,6 +8,7 @@ import jakarta.xml.soap.SOAPMessage;
 import org.apache.wss4j.common.WSEncryptionPart;
 import org.apache.wss4j.common.crypto.Crypto;
 import org.apache.wss4j.common.ext.Attachment;
+import org.apache.wss4j.common.util.AttachmentUtils;
 import org.apache.wss4j.dom.WSConstants;
 import org.apache.wss4j.dom.WSDataRef;
 import org.apache.wss4j.dom.engine.WSSConfig;
@@ -31,6 +32,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -72,6 +74,7 @@ final class AttachmentSecurity {
         final List<String> problems;
         final List<String> attachmentSha256;
         final List<String> rawAttachmentSha256;
+        final List<String> attachmentHeaderBlocks;
         final boolean sawSignature;
         final boolean sawEncryption;
 
@@ -80,12 +83,14 @@ final class AttachmentSecurity {
                 List<String> problems,
                 List<String> attachmentSha256,
                 List<String> rawAttachmentSha256,
+                List<String> attachmentHeaderBlocks,
                 boolean sawSignature,
                 boolean sawEncryption) {
             this.ok = ok;
             this.problems = problems;
             this.attachmentSha256 = attachmentSha256;
             this.rawAttachmentSha256 = rawAttachmentSha256;
+            this.attachmentHeaderBlocks = attachmentHeaderBlocks;
             this.sawSignature = sawSignature;
             this.sawEncryption = sawEncryption;
         }
@@ -112,6 +117,16 @@ final class AttachmentSecurity {
         Iterator<?> rawParts = message.getAttachments();
         while (rawParts.hasNext()) {
             rawDigests.add(sha256(((AttachmentPart) rawParts.next()).getRawContentBytes()));
+        }
+
+        // What WSS4J canonicalizes the inbound headers to, reported whatever the outcome. A complete
+        // coverage disagreement surfaces as nothing but a digest mismatch, so the block itself is the only
+        // diagnosable thing the far side can compare against.
+        List<String> headerBlocks = new ArrayList<>();
+        for (Attachment attachment : inbound) {
+            java.io.ByteArrayOutputStream canonical = new java.io.ByteArrayOutputStream();
+            AttachmentUtils.canonizeMimeHeaders(canonical, attachment.getHeaders());
+            headerBlocks.add(canonical.toString(StandardCharsets.UTF_8));
         }
 
         AttachmentCallbackHandler attachmentHandler = new AttachmentCallbackHandler(inbound);
@@ -165,7 +180,8 @@ final class AttachmentSecurity {
             digests.add(sha256(attachment.getSourceStream().readAllBytes()));
         }
 
-        return new CheckResult(problems.isEmpty(), problems, digests, rawDigests, sawSignature, sawEncryption);
+        return new CheckResult(
+                problems.isEmpty(), problems, digests, rawDigests, headerBlocks, sawSignature, sawEncryption);
     }
 
     /** The bare Content-IDs the given action covered, taken from the data references WSS4J reports. */
@@ -238,7 +254,8 @@ final class AttachmentSecurity {
             if (config.requireTimestamp) {
                 signature.getParts().add(new WSEncryptionPart("Timestamp", WSConstants.WSU_NS, "Element"));
             }
-            signature.getParts().add(new WSEncryptionPart(ALL_ATTACHMENTS, "Content"));
+            signature.getParts().add(
+                    new WSEncryptionPart(ALL_ATTACHMENTS, config.attachmentSignatureCoverage));
 
             signature.build(crypto);
         }
@@ -261,7 +278,8 @@ final class AttachmentSecurity {
                 encrypt.getParts().add(
                         new WSEncryptionPart(WSConstants.ELEM_BODY, soapNamespace(document), "Content"));
             }
-            encrypt.getParts().add(new WSEncryptionPart(ALL_ATTACHMENTS, "Content"));
+            encrypt.getParts().add(
+                    new WSEncryptionPart(ALL_ATTACHMENTS, config.attachmentEncryptionCoverage));
 
             KeyGenerator keyGen = KeyGenerator.getInstance("AES");
             keyGen.init(256);
@@ -295,6 +313,19 @@ final class AttachmentSecurity {
             AttachmentPart attachment = out.createAttachmentPart();
             attachment.setRawContentBytes(bytes, 0, bytes.length, mimeType);
             attachment.setContentId("<" + bare(part.getId()) + ">");
+
+            // The headers the part carries after the operation, which after a complete encryption are the
+            // minimal ones the profile leaves in the clear. Set explicitly so the far side reads what WSS4J
+            // decided rather than what SAAJ would default to.
+            if (part.getHeaders() != null) {
+                for (Map.Entry<String, String> header : part.getHeaders().entrySet()) {
+                    if ("Content-ID".equalsIgnoreCase(header.getKey())
+                            || "Content-Type".equalsIgnoreCase(header.getKey())) {
+                        continue;
+                    }
+                    attachment.setMimeHeader(header.getKey(), header.getValue());
+                }
+            }
             out.addAttachmentPart(attachment);
         }
 
@@ -329,8 +360,15 @@ final class AttachmentSecurity {
             attachment.setId(bare(part.getContentId()));
             attachment.setMimeType(part.getContentType());
             attachment.setSourceStream(new ByteArrayInputStream(part.getRawContentBytes()));
-            attachment.addHeader("Content-Type", part.getContentType());
-            attachment.addHeader("Content-ID", part.getContentId());
+
+            // Every header the part travelled with, not just the two SAAJ exposes as accessors. A coverage
+            // of a part's metadata canonicalizes whatever is here, so dropping a Content-Disposition the
+            // sender covered turns into a digest mismatch with nothing to point at.
+            Iterator<?> headers = part.getAllMimeHeaders();
+            while (headers.hasNext()) {
+                jakarta.xml.soap.MimeHeader header = (jakarta.xml.soap.MimeHeader) headers.next();
+                attachment.addHeader(header.getName(), header.getValue());
+            }
             attachments.add(attachment);
         }
 

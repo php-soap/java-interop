@@ -30,6 +30,17 @@ public final class ScenarioConfig {
      * {@code sp:Attachments} assertion under {@code sp:EncryptedParts} asks for.
      */
     public boolean encryptAttachments = false;
+
+    /**
+     * How much of an attachment the signature covers: {@code Content} for its bytes alone, {@code Element}
+     * for its canonicalized MIME headers as well. A bare {@code sp:Attachments} means Element, and
+     * {@code sp13:ContentSignatureTransform} is what opts out of it, so this is the modifier CXF's
+     * {@code getSignedParts()} picks from the policy.
+     */
+    public String attachmentSignatureCoverage = "Content";
+
+    /** The same choice for encryption, which no policy validates but a default-configured sender emits. */
+    public String attachmentEncryptionCoverage = "Content";
     public boolean requireUsernameToken = false; // enforce/produce wsse:UsernameToken
     public boolean requireSaml = false;          // enforce/produce a saml:Assertion in the Security header
 
@@ -130,6 +141,10 @@ public final class ScenarioConfig {
         config.requireEncryption = boolProp(props, "require.encryption", config.requireEncryption);
         config.signAttachments = boolProp(props, "attachments.sign", config.signAttachments);
         config.encryptAttachments = boolProp(props, "attachments.encrypt", config.encryptAttachments);
+        config.attachmentSignatureCoverage =
+                props.getProperty("attachments.signCoverage", config.attachmentSignatureCoverage).trim();
+        config.attachmentEncryptionCoverage =
+                props.getProperty("attachments.encryptCoverage", config.attachmentEncryptionCoverage).trim();
         config.requireUsernameToken = boolProp(props, "require.usernameToken", config.requireUsernameToken);
         config.requireSaml = boolProp(props, "require.saml", config.requireSaml);
         config.timestampTimeToLiveSeconds =

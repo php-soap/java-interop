@@ -6,6 +6,7 @@ namespace SoapInterop\Tests\Wsse;
 
 use Http\Discovery\Psr17FactoryDiscovery;
 use Phpro\ResourceStream\Factory\MemoryStream;
+use Psl\MIME\Headers;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Message\RequestInterface;
 use Soap\Psr18AttachmentsMiddleware\Attachment\Attachment;
@@ -18,7 +19,9 @@ use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
 use Soap\Psr18WsseMiddleware\KeyStore\Key;
 use Soap\Psr18WsseMiddleware\KeyStore\TrustStore;
 use Soap\Psr18WsseMiddleware\WSSecurity\Attachment\AttachmentParts;
+use Soap\Psr18WsseMiddleware\WSSecurity\Attachment\MimeHeaderBlock;
 use Soap\Psr18WsseMiddleware\WSSecurity\Exception\SecurityFault;
+use Soap\Psr18WsseMiddleware\WSSecurity\Exception\UnsupportedAttachmentHeaderForm;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
@@ -26,6 +29,7 @@ use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
 use Soap\Psr18WsseMiddleware\WSSecurity\SoapVersion;
 use Soap\Psr18WsseMiddleware\WSSecurity\WsseContext;
 use Soap\Psr18WsseMiddleware\XmlSecurity\Exception\SigningFailed;
+use Soap\Psr18WsseMiddleware\XmlSecurity\ExternalPartCoverage;
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use VeeWee\Xml\Dom\Document;
@@ -189,6 +193,168 @@ final class AttachmentSecurityTest extends InteropTestCase
             );
     }
 
+    // ---------------------------------------------------------------- the complete coverage
+
+    #[DataProvider('packagings')]
+    public function test_wss4j_verifies_an_attachment_php_covered_completely(AttachmentType $type): void
+    {
+        $payload = $this->ramp(4096);
+
+        $result = $this->javaCheck(
+            $this->phpSecure($payload, sign: true, type: $type, coverage: ExternalPartCoverage::Complete),
+            signAttachments: true,
+            type: $type,
+            signCoverage: 'Element',
+        );
+
+        self::assertTrue(
+            $result['valid'],
+            'WSS4J rejected a completely covered attachment: '.($result['error'] ?? ''),
+        );
+        self::assertTrue($result['signature'], 'WSS4J saw no signature over the attachment');
+    }
+
+    public function test_the_header_block_both_stacks_canonicalize_is_the_same(): void
+    {
+        // The one thing a complete coverage can silently disagree on. A mismatch would otherwise surface as
+        // a bare digest failure, so the oracle reports the block it computed and this compares it against
+        // the block PHP composed for the same part.
+        $storage = new AttachmentStorage();
+        $storage->requestAttachments()->add(new Attachment(
+            '<'.self::CID.'>',
+            'file',
+            'invoice.pdf',
+            'application/octet-stream',
+            $this->stream($payload = $this->ramp(64)),
+        ));
+
+        $document = Document::fromXmlString(self::envelope());
+        (new Outbound\Timestamp(300))($context = new WsseContext(
+            $document,
+            SoapVersion::Soap11,
+            new SecurityProfile(),
+        ));
+        (new Outbound\Signature($this->clientCertificate()))
+            ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Complete))($context);
+
+        $result = $this->javaCheck(
+            $this->pack($document->toXmlString(), $storage),
+            signAttachments: true,
+            signCoverage: 'Element',
+        );
+
+        self::assertSame(
+            [(new MimeHeaderBlock())->canonicalize($storage->requestAttachments()->findById('<'.self::CID.'>')->headers)],
+            $result['headerBlocks'],
+            'the two stacks must canonicalize the same header set to the same octets',
+        );
+        self::assertNotSame('', $payload);
+    }
+
+    #[DataProvider('packagings')]
+    public function test_php_verifies_an_attachment_wss4j_covered_completely(AttachmentType $type): void
+    {
+        $payload = $this->ramp(4096);
+
+        [$document, $storage] = $this->javaSecured(
+            $payload,
+            signAttachments: true,
+            type: $type,
+            signCoverage: 'Element',
+        );
+
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Complete))(
+                new WsseContext($document, self::soapVersionFor($type), new SecurityProfile()),
+            );
+
+        self::assertSame(
+            hash('sha256', $payload),
+            hash('sha256', $this->onlyAttachment($storage)->content->rewind()->getContents()),
+            'the attachment WSS4J covered must arrive unchanged',
+        );
+    }
+
+    public function test_php_refuses_a_content_only_reference_when_it_asked_for_a_complete_one(): void
+    {
+        $payload = $this->ramp(1024);
+
+        // A peer covering less than it was asked to. The digest would verify; the coverage is what refuses.
+        [$document, $storage] = $this->javaSecured($payload, signAttachments: true);
+
+        $this->expectException(SecurityFault::class);
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Complete))(
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+            );
+    }
+
+    public function test_php_decrypts_an_attachment_wss4j_encrypted_completely(): void
+    {
+        $payload = $this->ramp(4096);
+
+        [$document, $storage] = $this->javaSecured(
+            $payload,
+            encryptAttachments: true,
+            encryptCoverage: 'Element',
+        );
+
+        (new Inbound\Decrypt($this->privateKey()))
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Complete))(
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+            );
+
+        $opened = $this->onlyAttachment($storage);
+        self::assertSame(
+            hash('sha256', $payload),
+            hash('sha256', $opened->content->rewind()->getContents()),
+            'PHP must recover exactly the bytes WSS4J sealed',
+        );
+        // The metadata was inside the ciphertext, so recovering it is the whole point of this coverage.
+        self::assertSame('<'.self::CID.'>', $opened->headers->get('Content-ID'));
+        self::assertNotNull($opened->headers->get('Content-Type'));
+    }
+
+    public function test_wss4j_verifies_a_part_php_covered_completely_and_encrypted_content_only(): void
+    {
+        // The mixed mode the two policy validators actually reward, and the one whose failure looks like a
+        // canonicalizer bug: the media type has to come back whole for the restored headers to canonicalize
+        // to what was signed.
+        $payload = $this->ramp(2048);
+
+        $result = $this->javaCheck(
+            $this->phpSecure($payload, sign: true, encrypt: true, coverage: ExternalPartCoverage::Complete),
+            signAttachments: true,
+            encryptAttachments: true,
+            signCoverage: 'Element',
+        );
+
+        self::assertTrue($result['valid'], 'WSS4J rejected the mixed coverage: '.($result['error'] ?? ''));
+        self::assertContains(hash('sha256', $payload), $result['sha256']);
+    }
+
+    public function test_php_refuses_to_cover_a_header_it_cannot_canonicalize(): void
+    {
+        // Pinned as deliberate rather than incidental. A guessed canonicalization is a wrong digest with no
+        // diagnostic; a refusal names the header.
+        $storage = new AttachmentStorage();
+        $storage->requestAttachments()->add(Attachment::fromHeaders(
+            Headers::fromPairs([
+                ['Content-ID', '<'.self::CID.'>'],
+                ['Content-Type', 'application/octet-stream (the invoice)'],
+            ]),
+            $this->stream($this->ramp(64)),
+        ));
+
+        $this->expectException(UnsupportedAttachmentHeaderForm::class);
+        $this->expectExceptionMessage('"Content-Type" carries a comment');
+
+        (new Outbound\Signature($this->clientCertificate()))
+            ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Complete))(
+                new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile()),
+            );
+    }
+
     // ---------------------------------------------------------------- the pinned refusals
 
     /**
@@ -315,6 +481,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         AttachmentType $type = AttachmentType::Swa,
         string $mimeType = 'application/octet-stream',
         string $filename = 'invoice.pdf',
+        ExternalPartCoverage $coverage = ExternalPartCoverage::Content,
     ): RequestInterface {
         $storage = new AttachmentStorage();
         $storage->requestAttachments()->add(new Attachment(
@@ -332,7 +499,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         if ($sign) {
             (new Outbound\Signature($this->clientCertificate()))
-                ->withAttachments(AttachmentParts::request($storage))($context);
+                ->withAttachments(AttachmentParts::request($storage, $coverage))($context);
         }
 
         if ($encrypt) {
@@ -387,6 +554,8 @@ final class AttachmentSecurityTest extends InteropTestCase
         bool $encryptAttachments = false,
         AttachmentType $type = AttachmentType::Swa,
         string $mimeType = 'application/octet-stream',
+        string $signCoverage = 'Content',
+        string $encryptCoverage = 'Content',
     ): array {
         $storage = new AttachmentStorage();
         $storage->requestAttachments()->add(new Attachment(
@@ -401,10 +570,12 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         $response = Oracle::postRaw(
             sprintf(
-                '/attach/secure?protocol=%s&signatt=%s&encatt=%s&recipient=php-client',
+                '/attach/secure?protocol=%s&signatt=%s&encatt=%s&signcover=%s&enccover=%s&recipient=php-client',
                 self::protocolFor($type),
                 $signAttachments ? 'true' : 'false',
                 $encryptAttachments ? 'true' : 'false',
+                $signCoverage,
+                $encryptCoverage,
             ),
             (string) $request->getBody(),
             $request->getHeaderLine('Content-Type'),
@@ -428,20 +599,22 @@ final class AttachmentSecurityTest extends InteropTestCase
     }
 
     /**
-     * @return array{valid:bool, error:?string, signature:bool, encryption:bool, sha256:list<string>, rawSha256:list<string>}
+     * @return array{valid:bool, error:?string, signature:bool, encryption:bool, sha256:list<string>, rawSha256:list<string>, headerBlocks:list<string>}
      */
     private function javaCheck(
         RequestInterface $request,
         bool $signAttachments = false,
         bool $encryptAttachments = false,
         AttachmentType $type = AttachmentType::Swa,
+        string $signCoverage = 'Content',
     ): array {
         $response = Oracle::postRaw(
             sprintf(
-                '/attach/check?protocol=%s&signatt=%s&encatt=%s',
+                '/attach/check?protocol=%s&signatt=%s&encatt=%s&signcover=%s',
                 self::protocolFor($type),
                 $signAttachments ? 'true' : 'false',
                 $encryptAttachments ? 'true' : 'false',
+                $signCoverage,
             ),
             (string) $request->getBody(),
             $request->getHeaderLine('Content-Type'),
