@@ -244,7 +244,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         );
 
         self::assertSame(
-            [(new MimeHeaderBlock())->canonicalize($storage->requestAttachments()->findById('<'.self::CID.'>')->headers)],
+            [(new MimeHeaderBlock())->canonicalize($storage->requestAttachments()->findById('<'.self::CID.'>')->headers())],
             $result['headerBlocks'],
             'the two stacks must canonicalize the same header set to the same octets',
         );
@@ -311,8 +311,8 @@ final class AttachmentSecurityTest extends InteropTestCase
             'PHP must recover exactly the bytes WSS4J sealed',
         );
         // The metadata was inside the ciphertext, so recovering it is the whole point of this coverage.
-        self::assertSame('<'.self::CID.'>', $opened->headers->get('Content-ID'));
-        self::assertNotNull($opened->headers->get('Content-Type'));
+        self::assertSame('<'.self::CID.'>', $opened->headers()->get('Content-ID'));
+        self::assertNotNull($opened->headers()->get('Content-Type'));
     }
 
     public function test_wss4j_verifies_a_part_php_covered_completely_and_encrypted_content_only(): void
