@@ -72,6 +72,8 @@ public final class OracleServer {
         http.createContext("/decrypt", server.opHandler(server::decrypt));
         http.createContext("/saml/issue", server.opHandler(server::issueSamlAssertion));
         http.createContext("/attach", server::handleAttach);
+        http.createContext("/attach/secure", server::handleAttachSecure);
+        http.createContext("/attach/check", server::handleAttachCheck);
         http.setExecutor(java.util.concurrent.Executors.newFixedThreadPool(8));
         http.start();
 
@@ -209,6 +211,100 @@ public final class OracleServer {
         }
     }
 
+    /**
+     * Signs and/or encrypts the attachments of a plain multipart the PHP side sent, and returns the secured
+     * multipart for the PHP verifier or decryptor to consume.
+     *
+     * {@code ?signatt=true&encatt=true&protocol=soap12}
+     */
+    private void handleAttachSecure(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            respond(exchange, 405, "text/plain", "method not allowed");
+            return;
+        }
+
+        Map<String, String> q = queryParams(exchange.getRequestURI());
+        ScenarioConfig config = configFrom(exchange.getRequestURI());
+        String protocol = q.getOrDefault("protocol", "soap12");
+
+        byte[] requestBody;
+        try (InputStream in = exchange.getRequestBody()) {
+            requestBody = in.readAllBytes();
+        }
+
+        String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+        if (contentType == null || contentType.isEmpty()) {
+            respond(exchange, 400, "text/plain", "missing Content-Type for multipart secure");
+            return;
+        }
+
+        try {
+            Attachments.EmitResult result =
+                    new AttachmentSecurity(crypto, config).secure(requestBody, contentType, protocol);
+            exchange.getResponseHeaders().set("Content-Type", result.contentType);
+            exchange.sendResponseHeaders(200, result.body.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(result.body);
+            }
+        } catch (Exception e) {
+            respond(exchange, 500, "text/plain", rootMessage(e));
+        }
+    }
+
+    /**
+     * Runs WSS4J over a secured multipart the PHP side produced and reports what it made of it, including the
+     * SHA-256 of each attachment after processing. A verification "no" is a normal 200 with valid:false.
+     *
+     * {@code ?signatt=true&encatt=true&protocol=soap12}
+     */
+    private void handleAttachCheck(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            respond(exchange, 405, "text/plain", "method not allowed");
+            return;
+        }
+
+        Map<String, String> q = queryParams(exchange.getRequestURI());
+        ScenarioConfig config = configFrom(exchange.getRequestURI());
+        String protocol = q.getOrDefault("protocol", "soap12");
+
+        byte[] requestBody;
+        try (InputStream in = exchange.getRequestBody()) {
+            requestBody = in.readAllBytes();
+        }
+
+        String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+        if (contentType == null || contentType.isEmpty()) {
+            respond(exchange, 400, "text/plain", "missing Content-Type for multipart check");
+            return;
+        }
+
+        AttachmentSecurity.CheckResult result;
+        try {
+            result = new AttachmentSecurity(crypto, config).check(requestBody, contentType, protocol);
+        } catch (Exception e) {
+            // A refusal is a result, not a server error: the PHP side asserts on valid:false.
+            respond(exchange, 200, "application/json",
+                    "{\"valid\":false,\"error\":\"" + escapeJson(rootMessage(e)) + "\",\"sha256\":[]}");
+            return;
+        }
+
+        StringBuilder shas = new StringBuilder("[");
+        for (int i = 0; i < result.attachmentSha256.size(); i++) {
+            if (i > 0) {
+                shas.append(',');
+            }
+            shas.append('"').append(result.attachmentSha256.get(i)).append('"');
+        }
+        shas.append(']');
+
+        respond(exchange, 200, "application/json",
+                "{\"valid\":" + result.ok
+                        + ",\"error\":" + (result.ok ? "null" : "\"" + escapeJson(String.join("; ", result.problems)) + "\"")
+                        + ",\"signature\":" + result.sawSignature
+                        + ",\"encryption\":" + result.sawEncryption
+                        + ",\"sha256\":" + shas + "}");
+    }
+
     /** The SOAP envelope the emit op wraps: a plain Body for SwA, one carrying an xop:Include for MTOM. */
     private static byte[] soapEnvelopeFor(String type, String cid) {
         String body;
@@ -255,6 +351,12 @@ public final class OracleServer {
         ScenarioConfig config = new ScenarioConfig();
         if (q.containsKey("keyref")) {
             config.signatureKeyReference = q.get("keyref");
+        }
+        if (q.containsKey("signatt")) {
+            config.signAttachments = Boolean.parseBoolean(q.get("signatt"));
+        }
+        if (q.containsKey("encatt")) {
+            config.encryptAttachments = Boolean.parseBoolean(q.get("encatt"));
         }
         if (q.containsKey("sigalg")) {
             config.signatureAlgorithm = q.get("sigalg");
