@@ -9,6 +9,7 @@ import org.apache.wss4j.common.WSEncryptionPart;
 import org.apache.wss4j.common.crypto.Crypto;
 import org.apache.wss4j.common.ext.Attachment;
 import org.apache.wss4j.dom.WSConstants;
+import org.apache.wss4j.dom.WSDataRef;
 import org.apache.wss4j.dom.engine.WSSConfig;
 import org.apache.wss4j.dom.engine.WSSecurityEngine;
 import org.apache.wss4j.dom.engine.WSSecurityEngineResult;
@@ -27,8 +28,10 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 /**
  * WS-Security over SOAP attachments, per the WSS SwA Profile 1.1, as the oracle side of the interop matrix.
@@ -125,20 +128,19 @@ final class AttachmentSecurity {
 
         WSHandlerResult handlerResult = new WSSecurityEngine().processSecurityHeader(document, data);
 
-        boolean sawSignature = false;
-        boolean sawEncryption = false;
-        for (WSSecurityEngineResult result : handlerResult.getResults()) {
-            Integer action = (Integer) result.get(WSSecurityEngineResult.TAG_ACTION);
-            if (action == null) {
-                continue;
-            }
-            if (action == WSConstants.SIGN) {
-                sawSignature = true;
-            }
-            if (action == WSConstants.ENCR) {
-                sawEncryption = true;
-            }
+        // Per action, the attachments it actually covered. WSS4J marks a data reference as an attachment and
+        // records the cid: URI it named, so this distinguishes "the message carried a signature" from "the
+        // signature covered this attachment", which a body-only signature would otherwise pass for.
+        Set<String> signed = coveredAttachments(handlerResult, WSConstants.SIGN);
+        Set<String> encrypted = coveredAttachments(handlerResult, WSConstants.ENCR);
+
+        Set<String> ids = new HashSet<>();
+        for (Attachment attachment : inbound) {
+            ids.add(attachment.getId());
         }
+
+        boolean sawSignature = !signed.isEmpty() && signed.containsAll(ids);
+        boolean sawEncryption = !encrypted.isEmpty() && encrypted.containsAll(ids);
 
         List<String> problems = new ArrayList<>();
         if (config.signAttachments && !sawSignature) {
@@ -164,6 +166,30 @@ final class AttachmentSecurity {
         }
 
         return new CheckResult(problems.isEmpty(), problems, digests, rawDigests, sawSignature, sawEncryption);
+    }
+
+    /** The bare Content-IDs the given action covered, taken from the data references WSS4J reports. */
+    private static Set<String> coveredAttachments(WSHandlerResult handlerResult, int wanted) {
+        Set<String> covered = new HashSet<>();
+        for (WSSecurityEngineResult result : handlerResult.getResults()) {
+            Integer action = (Integer) result.get(WSSecurityEngineResult.TAG_ACTION);
+            if (action == null || action != wanted) {
+                continue;
+            }
+
+            Object refs = result.get(WSSecurityEngineResult.TAG_DATA_REF_URIS);
+            if (!(refs instanceof List<?>)) {
+                continue;
+            }
+
+            for (Object ref : (List<?>) refs) {
+                if (ref instanceof WSDataRef dataRef && dataRef.isAttachment()) {
+                    covered.add(bare(dataRef.getWsuId()));
+                }
+            }
+        }
+
+        return covered;
     }
 
     /**
