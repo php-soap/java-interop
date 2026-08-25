@@ -44,14 +44,20 @@ use VeeWee\Xml\Dom\Document;
 final class AttachmentSecurityTest extends InteropTestCase
 {
     private const CID = 'invoice@example.com';
+    private const XOP = 'http://www.w3.org/2004/08/xop/include';
 
     // ---------------------------------------------------------------- PHP -> WSS4J
 
-    public function test_wss4j_verifies_an_attachment_php_signed(): void
+    #[DataProvider('packagings')]
+    public function test_wss4j_verifies_an_attachment_php_signed(AttachmentType $type): void
     {
         $payload = $this->ramp(4096);
 
-        $result = $this->javaCheck($this->phpSecure($payload, sign: true), signAttachments: true);
+        $result = $this->javaCheck(
+            $this->phpSecure($payload, sign: true, type: $type),
+            signAttachments: true,
+            type: $type,
+        );
 
         self::assertTrue($result['valid'], 'WSS4J rejected a PHP-signed attachment: '.($result['error'] ?? ''));
         self::assertTrue($result['signature'], 'WSS4J saw no signature at all');
@@ -62,19 +68,31 @@ final class AttachmentSecurityTest extends InteropTestCase
         );
     }
 
-    public function test_wss4j_decrypts_an_attachment_php_encrypted(): void
+    #[DataProvider('packagings')]
+    public function test_wss4j_decrypts_an_attachment_php_encrypted(AttachmentType $type): void
     {
         $payload = $this->ramp(4096);
 
-        $result = $this->javaCheck($this->phpSecure($payload, encrypt: true), encryptAttachments: true);
+        $result = $this->javaCheck(
+            $this->phpSecure($payload, encrypt: true, type: $type),
+            encryptAttachments: true,
+            type: $type,
+        );
 
         self::assertTrue($result['valid'], 'WSS4J rejected a PHP-encrypted attachment: '.($result['error'] ?? ''));
         self::assertTrue($result['encryption'], 'WSS4J saw no encryption at all');
-        // The plaintext digest is the proof: a decryption that recovered nothing would also "not fail".
+        // The plaintext digest is the proof: a decryption that recovered nothing would also "not fail". Under
+        // MTOM it is also the disclosure check. A peer that resolved the xop:Include before its security
+        // interceptor ran would report the ciphertext it inlined, never this digest.
         self::assertContains(
             hash('sha256', $payload),
             $result['sha256'],
             'WSS4J must recover exactly the bytes PHP encrypted',
+        );
+        self::assertNotContains(
+            hash('sha256', $payload),
+            $result['rawSha256'],
+            'the payload must reach WSS4J as ciphertext, never in the clear',
         );
     }
 
@@ -106,15 +124,16 @@ final class AttachmentSecurityTest extends InteropTestCase
 
     // ---------------------------------------------------------------- WSS4J -> PHP
 
-    public function test_php_verifies_an_attachment_wss4j_signed(): void
+    #[DataProvider('packagings')]
+    public function test_php_verifies_an_attachment_wss4j_signed(AttachmentType $type): void
     {
         $payload = $this->ramp(4096);
 
-        [$document, $storage] = $this->javaSecured($payload, signAttachments: true);
+        [$document, $storage] = $this->javaSecured($payload, signAttachments: true, type: $type);
 
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
             ->withAttachments(AttachmentParts::response($storage))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext($document, self::soapVersionFor($type), new SecurityProfile()),
             );
 
         // Reaching here is the pass: the block throws rather than returning a verdict.
@@ -125,11 +144,12 @@ final class AttachmentSecurityTest extends InteropTestCase
         );
     }
 
-    public function test_php_decrypts_an_attachment_wss4j_encrypted(): void
+    #[DataProvider('packagings')]
+    public function test_php_decrypts_an_attachment_wss4j_encrypted(AttachmentType $type): void
     {
         $payload = $this->ramp(4096);
 
-        [$document, $storage] = $this->javaSecured($payload, encryptAttachments: true);
+        [$document, $storage] = $this->javaSecured($payload, encryptAttachments: true, type: $type);
 
         // Arrived as ciphertext.
         self::assertNotSame(
@@ -139,7 +159,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         (new Inbound\Decrypt($this->privateKey()))
             ->withAttachments(AttachmentParts::response($storage))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext($document, self::soapVersionFor($type), new SecurityProfile()),
             );
 
         self::assertSame(
@@ -169,31 +189,116 @@ final class AttachmentSecurityTest extends InteropTestCase
             );
     }
 
-    // ---------------------------------------------------------------- the pinned refusal
+    // ---------------------------------------------------------------- the pinned refusals
 
-    public function test_php_refuses_to_sign_a_text_attachment(): void
+    /**
+     * @param non-empty-string $mimeType
+     */
+    #[DataProvider('canonicalizedMediaTypes')]
+    public function test_php_refuses_to_sign_a_canonicalized_attachment(string $mimeType, string $reason): void
     {
-        // Pinned rather than incidental: the profile canonicalizes line endings in text content before
-        // digesting, which this package does not implement, so signing one would produce a digest WSS4J
-        // rejects. Refusing at the point of signing is the deliberate behaviour.
+        // Pinned rather than incidental. WSS4J's AttachmentContentSignatureTransform canonicalizes both
+        // families before digesting, so signing one here would produce a digest it rejects. The companion
+        // case below is the evidence for that claim rather than a reading of the profile.
         $storage = new AttachmentStorage();
         $storage->requestAttachments()->add(new Attachment(
             '<'.self::CID.'>',
             'file',
             'note.txt',
-            'text/plain',
+            $mimeType,
             $this->stream("line one\nline two\n"),
         ));
 
         $document = Document::fromXmlString(self::envelope());
 
         $this->expectException(SigningFailed::class);
-        $this->expectExceptionMessage('content line-ending canonicalization, which is not supported');
+        $this->expectExceptionMessage($reason);
 
         (new Outbound\Signature($this->clientCertificate()))
             ->withAttachments(AttachmentParts::request($storage))(
                 new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
             );
+    }
+
+    /**
+     * @return iterable<string, array{0: non-empty-string, 1: string}>
+     */
+    public static function canonicalizedMediaTypes(): iterable
+    {
+        yield 'text' => ['text/plain', 'content line-ending canonicalization, which is not supported'];
+        yield 'xml' => ['application/xml', 'XML canonicalization, which is not supported'];
+    }
+
+    public function test_wss4j_digests_a_text_attachment_over_normalized_line_endings(): void
+    {
+        // The measurement the refusal above rests on, rather than a reading of the profile. WSS4J is asked to
+        // sign a text part whose content mixes bare LFs with CRLFs, and the digest it publishes is read back
+        // off the wire. It is the digest of the CRLF-normalized form, not of the octets that travelled.
+        $payload = "line one\nline two\r\nline three";
+        $normalized = "line one\r\nline two\r\nline three";
+
+        [$document, $storage] = $this->javaSecured($payload, signAttachments: true, mimeType: 'text/plain');
+
+        self::assertSame(
+            $payload,
+            $this->onlyAttachment($storage)->content->rewind()->getContents(),
+            'the attachment travels unmodified; only the digest taken over it differs',
+        );
+
+        $published = $this->attachmentDigestOf($document);
+        self::assertSame(
+            base64_encode(hash('sha256', $normalized, true)),
+            $published,
+            'WSS4J must digest the CRLF-normalized form of a text part',
+        );
+        self::assertNotSame(
+            base64_encode(hash('sha256', $payload, true)),
+            $published,
+            'and so must not digest the octets on the wire, which is what this package would sign',
+        );
+    }
+
+    /** The ds:DigestValue of the ds:Reference covering the attachment. */
+    private function attachmentDigestOf(Document $document): string
+    {
+        $digests = $document->xpath()->query(
+            '//*[local-name()="Reference"][@URI="cid:'.self::CID.'"]/*[local-name()="DigestValue"]'
+        );
+
+        self::assertCount(1, $digests, 'expected exactly one signed reference over the attachment');
+
+        return trim($digests->item(0)->textContent);
+    }
+
+    public function test_php_verifies_a_text_attachment_whose_line_endings_are_already_normalized(): void
+    {
+        // The control for the case above: identical in every way except that the two canonical forms
+        // coincide. It verifies, which isolates the line endings as the whole of the disagreement.
+        $payload = "line one\r\nline two\r\nline three";
+
+        [$document, $storage] = $this->javaSecured($payload, signAttachments: true, mimeType: 'text/plain');
+
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
+            ->withAttachments(AttachmentParts::response($storage))(
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+            );
+
+        self::assertSame(
+            hash('sha256', $payload),
+            hash('sha256', $this->onlyAttachment($storage)->content->rewind()->getContents()),
+        );
+    }
+
+    /**
+     * SwA and MTOM alike. Attachment security sees one mechanism in both, a MIME part addressed by a cid, and
+     * no code on either side of the wire branches on the packaging. These cases are what says so.
+     *
+     * @return iterable<string, array{0: AttachmentType}>
+     */
+    public static function packagings(): iterable
+    {
+        yield 'swa' => [AttachmentType::Swa];
+        yield 'mtom' => [AttachmentType::Mtom];
     }
 
     // ---------------------------------------------------------------- helpers
@@ -207,18 +312,21 @@ final class AttachmentSecurityTest extends InteropTestCase
         bool $sign = false,
         bool $encrypt = false,
         bool $tamper = false,
+        AttachmentType $type = AttachmentType::Swa,
+        string $mimeType = 'application/octet-stream',
+        string $filename = 'invoice.pdf',
     ): RequestInterface {
         $storage = new AttachmentStorage();
         $storage->requestAttachments()->add(new Attachment(
             '<'.self::CID.'>',
             'file',
-            'invoice.pdf',
-            'application/octet-stream',
+            $filename,
+            $mimeType,
             $this->stream($payload),
         ));
 
-        $document = Document::fromXmlString(self::envelope());
-        $context = new WsseContext($document, SoapVersion::Soap11, new SecurityProfile());
+        $document = Document::fromXmlString(self::envelope($type));
+        $context = new WsseContext($document, self::soapVersionFor($type), new SecurityProfile());
 
         (new Outbound\Timestamp(300))($context);
 
@@ -242,21 +350,27 @@ final class AttachmentSecurityTest extends InteropTestCase
             ));
         }
 
-        return $this->pack($document->toXmlString(), $storage);
+        return $this->pack($document->toXmlString(), $storage, $type);
     }
 
-    /** Packs a SOAP part plus the storage's request attachments into a SwA multipart request. */
-    private function pack(string $soapXml, AttachmentStorage $storage): RequestInterface
-    {
+    /** Packs a SOAP part plus the storage's request attachments into a multipart request. */
+    private function pack(
+        string $soapXml,
+        AttachmentStorage $storage,
+        AttachmentType $type = AttachmentType::Swa,
+    ): RequestInterface {
         $requestFactory = Psr17FactoryDiscovery::findRequestFactory();
         $streamFactory = Psr17FactoryDiscovery::findStreamFactory();
 
         $request = $requestFactory
             ->createRequest('POST', 'http://interop.test/service')
             ->withBody($streamFactory->createStream($soapXml))
-            ->withHeader('Content-Type', 'text/xml; charset=UTF-8');
+            ->withHeader('Content-Type', match ($type) {
+                AttachmentType::Swa => 'text/xml; charset=UTF-8',
+                AttachmentType::Mtom => 'application/soap+xml; charset=UTF-8',
+            });
 
-        $built = (RequestBuilder::default())($request, $storage, AttachmentType::Swa);
+        $built = (RequestBuilder::default())($request, $storage, $type);
 
         return $built->withBody($streamFactory->createStream((string) $built->getBody()));
     }
@@ -271,21 +385,24 @@ final class AttachmentSecurityTest extends InteropTestCase
         string $payload,
         bool $signAttachments = false,
         bool $encryptAttachments = false,
+        AttachmentType $type = AttachmentType::Swa,
+        string $mimeType = 'application/octet-stream',
     ): array {
         $storage = new AttachmentStorage();
         $storage->requestAttachments()->add(new Attachment(
             '<'.self::CID.'>',
             'file',
             'invoice.pdf',
-            'application/octet-stream',
+            $mimeType,
             $this->stream($payload),
         ));
 
-        $request = $this->pack(self::envelope(), $storage);
+        $request = $this->pack(self::envelope($type), $storage, $type);
 
         $response = Oracle::postRaw(
             sprintf(
-                '/attach/secure?protocol=soap11&signatt=%s&encatt=%s&recipient=php-client',
+                '/attach/secure?protocol=%s&signatt=%s&encatt=%s&recipient=php-client',
+                self::protocolFor($type),
                 $signAttachments ? 'true' : 'false',
                 $encryptAttachments ? 'true' : 'false',
             ),
@@ -305,22 +422,24 @@ final class AttachmentSecurityTest extends InteropTestCase
             ->withBody($streamFactory->createStream($response['body']));
 
         $inbound = new AttachmentStorage();
-        $split = (ResponseBuilder::default())($psrResponse, $inbound, AttachmentType::Swa);
+        $split = (ResponseBuilder::default())($psrResponse, $inbound, $type);
 
         return [Document::fromXmlString((string) $split->getBody()), $inbound];
     }
 
     /**
-     * @return array{valid:bool, error:?string, signature:bool, encryption:bool, sha256:list<string>}
+     * @return array{valid:bool, error:?string, signature:bool, encryption:bool, sha256:list<string>, rawSha256:list<string>}
      */
     private function javaCheck(
         RequestInterface $request,
         bool $signAttachments = false,
         bool $encryptAttachments = false,
+        AttachmentType $type = AttachmentType::Swa,
     ): array {
         $response = Oracle::postRaw(
             sprintf(
-                '/attach/check?protocol=soap11&signatt=%s&encatt=%s',
+                '/attach/check?protocol=%s&signatt=%s&encatt=%s',
+                self::protocolFor($type),
                 $signAttachments ? 'true' : 'false',
                 $encryptAttachments ? 'true' : 'false',
             ),
@@ -377,9 +496,34 @@ final class AttachmentSecurityTest extends InteropTestCase
      * type="application/soap+xml" parameter, and the PHP RequestBuilder does not emit one, so the harness
      * reads a PHP SwA package as 1.1 throughout. Nothing about attachment security is version specific.
      */
-    private static function envelope(): string
+    private static function envelope(AttachmentType $type = AttachmentType::Swa): string
     {
-        return (string) file_get_contents(dirname(__DIR__, 2).'/samples/request-unsigned-soap11.xml');
+        if ($type === AttachmentType::Swa) {
+            return (string) file_get_contents(dirname(__DIR__, 2).'/samples/request-unsigned-soap11.xml');
+        }
+
+        // MTOM addresses the part from inside the document, while its bytes still travel as their own MIME
+        // part. That is what makes the two packagings one mechanism as far as attachment security goes.
+        return str_replace(
+            '<tns:message>hello from the interop harness</tns:message>',
+            '<tns:message><xop:Include xmlns:xop="'.self::XOP.'" href="cid:'.self::CID.'"/></tns:message>',
+            (string) file_get_contents(dirname(__DIR__, 2).'/samples/request-unsigned.xml'),
+        );
+    }
+
+    /**
+     * SOAP 1.2 for MTOM, and not a preference. The attachments package writes start-info="application/soap+xml"
+     * into an MTOM Content-Type whatever the envelope says, and SAAJ reads a start-info of text/xml as the only
+     * SOAP 1.1 XOP package there is, so a 1.1 envelope in an MTOM package is one SAAJ refuses to parse at all.
+     */
+    private static function soapVersionFor(AttachmentType $type): SoapVersion
+    {
+        return $type === AttachmentType::Swa ? SoapVersion::Soap11 : SoapVersion::Soap12;
+    }
+
+    private static function protocolFor(AttachmentType $type): string
+    {
+        return $type === AttachmentType::Swa ? 'soap11' : 'soap12';
     }
 
     /** A deterministic byte ramp, so the SHA-256 is stable and the bytes are non-trivial. */

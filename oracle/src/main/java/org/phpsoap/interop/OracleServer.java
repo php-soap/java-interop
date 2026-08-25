@@ -284,25 +284,21 @@ public final class OracleServer {
         } catch (Exception e) {
             // A refusal is a result, not a server error: the PHP side asserts on valid:false.
             respond(exchange, 200, "application/json",
-                    "{\"valid\":false,\"error\":\"" + escapeJson(rootMessage(e)) + "\",\"sha256\":[]}");
+                    "{\"valid\":false,\"error\":\"" + escapeJson(rootMessage(e))
+                            + "\",\"sha256\":[],\"rawSha256\":[]}");
             return;
         }
 
-        StringBuilder shas = new StringBuilder("[");
-        for (int i = 0; i < result.attachmentSha256.size(); i++) {
-            if (i > 0) {
-                shas.append(',');
-            }
-            shas.append('"').append(result.attachmentSha256.get(i)).append('"');
-        }
-        shas.append(']');
+        String shas = jsonStringArray(result.attachmentSha256);
+        String rawShas = jsonStringArray(result.rawAttachmentSha256);
 
         respond(exchange, 200, "application/json",
                 "{\"valid\":" + result.ok
                         + ",\"error\":" + (result.ok ? "null" : "\"" + escapeJson(String.join("; ", result.problems)) + "\"")
                         + ",\"signature\":" + result.sawSignature
                         + ",\"encryption\":" + result.sawEncryption
-                        + ",\"sha256\":" + shas + "}");
+                        + ",\"sha256\":" + shas
+                        + ",\"rawSha256\":" + rawShas + "}");
     }
 
     /** The SOAP envelope the emit op wraps: a plain Body for SwA, one carrying an xop:Include for MTOM. */
@@ -457,8 +453,30 @@ public final class OracleServer {
         return "{\"valid\":false,\"reason\":\"" + escapeJson(reason == null ? "" : reason) + "\"}";
     }
 
+    private static String jsonStringArray(java.util.List<String> values) {
+        StringBuilder out = new StringBuilder("[");
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) {
+                out.append(',');
+            }
+            out.append('"').append(escapeJson(values.get(i))).append('"');
+        }
+
+        return out.append(']').toString();
+    }
+
     private static String escapeJson(String s) {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
+        String escaped = s.replace("\\", "\\\\").replace("\"", "\\\"");
+
+        // Any remaining control character, a tab in a folded MIME header among them, is a parse error for a
+        // strict JSON reader rather than something it tolerates.
+        StringBuilder out = new StringBuilder(escaped.length());
+        for (int i = 0; i < escaped.length(); i++) {
+            char c = escaped.charAt(i);
+            out.append(c < 0x20 ? ' ' : c);
+        }
+
+        return out.toString();
     }
 
     private static String rootMessage(Throwable e) {

@@ -63,11 +63,12 @@ final class AttachmentSecurity {
         this.config = config;
     }
 
-    /** What WSS4J made of a secured multipart, plus the attachment digests after processing. */
+    /** What WSS4J made of a secured multipart, plus the attachment digests before and after processing. */
     static final class CheckResult {
         final boolean ok;
         final List<String> problems;
         final List<String> attachmentSha256;
+        final List<String> rawAttachmentSha256;
         final boolean sawSignature;
         final boolean sawEncryption;
 
@@ -75,11 +76,13 @@ final class AttachmentSecurity {
                 boolean ok,
                 List<String> problems,
                 List<String> attachmentSha256,
+                List<String> rawAttachmentSha256,
                 boolean sawSignature,
                 boolean sawEncryption) {
             this.ok = ok;
             this.problems = problems;
             this.attachmentSha256 = attachmentSha256;
+            this.rawAttachmentSha256 = rawAttachmentSha256;
             this.sawSignature = sawSignature;
             this.sawEncryption = sawEncryption;
         }
@@ -92,12 +95,22 @@ final class AttachmentSecurity {
      *
      * <p>The post-processing digest is the whole point of returning it. A decryption that silently did nothing
      * also "does not fail", so only comparing the recovered bytes against the original proves the round trip.
+     * The digest taken before processing answers the other half: it says what actually crossed the wire, which
+     * is how a caller tells an encrypted part from one that travelled in the clear.
      */
     CheckResult check(byte[] body, String contentType, String protocol) throws Exception {
         SOAPMessage message = parse(body, contentType, protocol);
         Document document = message.getSOAPPart().getEnvelope().getOwnerDocument();
 
         List<Attachment> inbound = attachmentsOf(message);
+
+        // Taken from the MIME parts rather than from the WSS4J attachments, whose streams the engine consumes.
+        List<String> rawDigests = new ArrayList<>();
+        Iterator<?> rawParts = message.getAttachments();
+        while (rawParts.hasNext()) {
+            rawDigests.add(sha256(((AttachmentPart) rawParts.next()).getRawContentBytes()));
+        }
+
         AttachmentCallbackHandler attachmentHandler = new AttachmentCallbackHandler(inbound);
 
         RequestData data = new RequestData();
@@ -150,7 +163,7 @@ final class AttachmentSecurity {
             digests.add(sha256(attachment.getSourceStream().readAllBytes()));
         }
 
-        return new CheckResult(problems.isEmpty(), problems, digests, sawSignature, sawEncryption);
+        return new CheckResult(problems.isEmpty(), problems, digests, rawDigests, sawSignature, sawEncryption);
     }
 
     /**
