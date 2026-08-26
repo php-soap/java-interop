@@ -20,7 +20,8 @@ import org.w3c.dom.Document;
  *   <li>Digest method: SHA-256</li>
  *   <li>Canonicalisation: exclusive C14N</li>
  *   <li>Key reference: BinarySecurityToken via direct Reference (ISSUER_SERIAL etc. would differ)</li>
- *   <li>Signed parts: SOAP Body and the wsu:Timestamp</li>
+ *   <li>Signed parts: SOAP Body and the wsu:Timestamp, plus the signing token itself when
+ *       {@code signature.strTransform} asks for it</li>
  * </ul>
  */
 final class Signer {
@@ -80,6 +81,13 @@ final class Signer {
                     new WSEncryptionPart(WSConstants.ELEM_BODY, soapNamespace(document), "Content"));
             if (config.requireTimestamp) {
                 signature.getParts().add(new WSEncryptionPart("Timestamp", WSConstants.WSU_NS, "Element"));
+            }
+            if (config.signTokenThroughStrTransform) {
+                // "STRTransform" is reserved: WSSecSignature rewrites this part's id to strUri, the
+                // wsse:SecurityTokenReference it puts in ds:KeyInfo, and WSSecSignatureBase gives the
+                // reference an STR-Transform carrying wsse:TransformationParameters instead of a plain c14n
+                // transform. The digest then covers the wsse:BinarySecurityToken that reference names.
+                signature.getParts().add(new WSEncryptionPart("STRTransform", null, "Element"));
             }
 
             signature.build(crypto);
