@@ -13,6 +13,7 @@ use Soap\Psr18WsseMiddleware\KeyStore\TrustStore;
 use Soap\Psr18WsseMiddleware\WSSecurity\Exception\SecurityFault;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\Keys;
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound\KeyReference\EncKeyRef;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound\KeyReference\KeyRef;
@@ -96,6 +97,71 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
     }
 
     // ----------------------------------------------------------------- WSS4J -> PHP
+
+    /**
+     * The direction a client actually experiences: a response keyed by the key its own request conveyed.
+     *
+     * The oracle answers by processing the request, unwrapping the session key with its private key, and
+     * signing and encrypting the answer under that same key. No xenc:EncryptedKey travels back, so PHP resolves
+     * the key from what the exchange established, which is the whole point of scoping the keys to an exchange.
+     */
+    public function test_php_reads_a_wss4j_response_keyed_by_the_key_its_request_established(): void
+    {
+        $keys = new ExchangeKeys();
+        $document = Document::fromXmlString(Oracle::sampleEnvelope());
+        $request = $this->context($document, $keys);
+
+        // The request establishes the key, exactly as it would in a real exchange.
+        $sessionKey = new Keys\WrappedSessionKey(
+            Certificate::fromFile(Oracle::certPath('java-server.crt')),
+            EncKeyRef::Thumbprint,
+        );
+        (new Outbound\Timestamp())($request);
+        (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
+            ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
+            ->withParts([Part::body(), Part::timestamp()])($request);
+        (new Outbound\Encryption($sessionKey))->withParts([Part::body()])($request);
+
+        $answered = Oracle::post('/symmetric/respond?sigalg=HMAC_SHA256', $document->toXmlString());
+        self::assertSame(200, $answered['status'], 'oracle /symmetric/respond failed: '.$answered['body']);
+
+        $response = Document::fromXmlString($answered['body']);
+        self::assertStringNotContainsString(self::PLAINTEXT_MARKER, $answered['body'], 'the answer is not encrypted');
+
+        // The same exchange keys the request used, which is what the middleware hands both directions.
+        $inbound = $this->context($response, $keys);
+        (new Inbound\Decrypt())($inbound);
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($inbound);
+
+        self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
+    }
+
+    public function test_php_refuses_that_same_response_against_a_different_exchange(): void
+    {
+        // The scoping rule, from the outside: a response opens against the exchange that established its key
+        // and against no other. Without that a captured answer would replay into any later call.
+        $keys = new ExchangeKeys();
+        $document = Document::fromXmlString(Oracle::sampleEnvelope());
+        $request = $this->context($document, $keys);
+
+        $sessionKey = new Keys\WrappedSessionKey(
+            Certificate::fromFile(Oracle::certPath('java-server.crt')),
+            EncKeyRef::Thumbprint,
+        );
+        (new Outbound\Timestamp())($request);
+        (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
+            ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
+            ->withParts([Part::body(), Part::timestamp()])($request);
+        (new Outbound\Encryption($sessionKey))->withParts([Part::body()])($request);
+
+        $answered = Oracle::post('/symmetric/respond?sigalg=HMAC_SHA256', $document->toXmlString());
+        self::assertSame(200, $answered['status'], 'oracle /symmetric/respond failed: '.$answered['body']);
+
+        $response = Document::fromXmlString($answered['body']);
+
+        $this->expectException(SecurityFault::class);
+        (new Inbound\Decrypt())($this->context($response, new ExchangeKeys()));
+    }
 
     /**
      * A key the peer minted and wrapped to us authenticates nobody, so a signature keyed by it must not verify
@@ -184,6 +250,11 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
      * AES-128-GCM is on the default list too, which leaves nothing to widen. Spelled out anyway, so a change to
      * the shipped defaults shows up here as a failing assertion rather than as a silently different message.
      */
+    private function context(Document $document, ExchangeKeys $keys): WsseContext
+    {
+        return new WsseContext($document, SoapVersion::Soap12, $this->profile(), $keys);
+    }
+
     private function profile(): SecurityProfile
     {
         return new SecurityProfile(crypto: new CryptoPolicy(

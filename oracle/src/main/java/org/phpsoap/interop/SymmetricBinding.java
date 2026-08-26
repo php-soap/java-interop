@@ -71,6 +71,46 @@ final class SymmetricBinding {
         encryptedKey.prependToHeader();
     }
 
+    /**
+     * Sign and encrypt with a key the peer already holds, naming it by the identifier the peer minted. No
+     * xenc:EncryptedKey is written: the key travelled with the request, so the answer only points at it.
+     *
+     * @param encryptedKeySha1 the identifier the request's own wrapped key digests to, which is the only name
+     *        both sides can compute once the key element itself is not in this message
+     */
+    void applyWithEstablishedKey(
+            Document document,
+            WSSecHeader header,
+            List<WSEncryptionPart> signedParts,
+            SecretKey sessionKey,
+            String encryptedKeySha1) throws Exception {
+
+        org.apache.xml.security.Init.init();
+
+        WSSecSignature signature = new WSSecSignature(header);
+        signature.setKeyIdentifierType(WSConstants.ENCRYPTED_KEY_SHA1_IDENTIFIER);
+        signature.setEncrKeySha1value(encryptedKeySha1);
+        signature.setSecretKey(sessionKey.getEncoded());
+        signature.setSignatureAlgorithm(macAlgorithm());
+        signature.setDigestAlgo(WSConstants.SHA256);
+        signature.setSigCanonicalization(Signer.canonicalizationUri(config.canonicalization));
+        signature.getParts().addAll(signedParts);
+        signature.build(crypto);
+
+        WSSecEncrypt encrypt = new WSSecEncrypt(header);
+        encrypt.setEncryptSymmKey(false);
+        encrypt.setKeyIdentifierType(WSConstants.ENCRYPTED_KEY_SHA1_IDENTIFIER);
+        encrypt.setCustomReferenceValue(encryptedKeySha1);
+        encrypt.setSymmetricEncAlgorithm(Encryptor.dataAlgorithm(config.dataEncryptionAlgorithm));
+        encrypt.getParts().add(bodyContent(document));
+        encrypt.build(crypto, sessionKey);
+    }
+
+    /** The SOAP Body content, as the part list every symmetric flow here covers. */
+    static WSEncryptionPart bodyContentPart(Document document) {
+        return bodyContent(document);
+    }
+
     /** Sign and encrypt with the session key itself, naming it by the digest of its cipher bytes. */
     private void applyDirectly(
             Document document,

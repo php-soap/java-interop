@@ -78,6 +78,7 @@ public final class OracleServer {
         http.createContext("/verify", server.opHandler(server::verify));
         http.createContext("/encrypt", server.opHandler(server::encrypt));
         http.createContext("/decrypt", server.opHandler(server::decrypt));
+        http.createContext("/symmetric/respond", server.opHandler(server::symmetricRespond));
         http.createContext("/saml/issue", server.opHandler(server::issueSamlAssertion));
         http.createContext("/attach", server::handleAttach);
         http.createContext("/attach/secure", server::handleAttachSecure);
@@ -119,6 +120,20 @@ public final class OracleServer {
     private void sign(HttpExchange exchange, String body, ScenarioConfig config) throws Exception {
         String signed = new Signer(crypto, config.signatureKeyAlias, STOREPASS, config).sign(parsable(body));
         respond(exchange, 200, "text/xml; charset=UTF-8", signed);
+    }
+
+    /**
+     * Answers a symmetric-binding request with the key that request conveyed, which is the one direction a
+     * client's accepting path can be tested from: a key the server minted itself authenticates nobody, so a
+     * correct client refuses it however well-formed the message is.
+     *
+     * The request is the body; the envelope to secure as the answer is the sample, because what the response
+     * says is not what is under test.
+     */
+    private void symmetricRespond(HttpExchange exchange, String body, ScenarioConfig config) throws Exception {
+        String response = new SymmetricResponder(crypto, config, STOREPASS)
+                .respond(parsable(body), SymmetricResponder.RESPONSE_ENVELOPE);
+        respond(exchange, 200, "text/xml; charset=UTF-8", response);
     }
 
     private void verify(HttpExchange exchange, String body, ScenarioConfig config) throws Exception {
