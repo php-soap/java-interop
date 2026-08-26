@@ -192,6 +192,38 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($context);
     }
 
+    /**
+     * The endorsed message, read back by PHP. Both signatures verify: the primary HMAC against the key this
+     * exchange established, and the endorsement against the client certificate. This is the shape the verifier
+     * refused before it learned to check every signature in its scope rather than exactly one.
+     */
+    public function test_php_reads_back_its_own_endorsed_binding(): void
+    {
+        $keys = new ExchangeKeys();
+        $document = Document::fromXmlString(Oracle::sampleEnvelope());
+        $context = $this->context($document, $keys);
+
+        $sessionKey = new Keys\WrappedSessionKey(
+            Certificate::fromFile(Oracle::certPath('java-server.crt')),
+            EncKeyRef::Thumbprint,
+        );
+        (new Outbound\Timestamp())($context);
+        (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
+            ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
+            ->withParts([Part::body(), Part::timestamp()])($context);
+        (new Outbound\Signature(new Outbound\CertificateSigningKey(
+            ClientCertificate::fromFile(Oracle::certPath('php-client.pem')),
+            KeyRef::BinarySecurityToken,
+        )))->withParts([Part::primarySignature()])($context);
+
+        // WSS4J accepts it, and so does this package: the same bytes, read by both.
+        self::assertTrue($this->verify($document->toXmlString())['valid']);
+
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body(), Part::timestamp()]))(
+            $this->context($document, $keys),
+        );
+    }
+
     // ----------------------------------------------------------------- helpers
 
     /**

@@ -409,11 +409,35 @@ final class SignatureInteropTest extends InteropTestCase
         self::assertStringContainsString('hello from the interop harness', $signed);
     }
 
-    public function test_duplicate_signature_is_rejected_by_php(): void
+    /**
+     * A duplicated signature is accepted, and that is not a weakening.
+     *
+     * PHP verifies every ds:Signature its scope carries and requires each to hold, which is what lets an
+     * endorsing supporting token work. A byte-identical copy therefore verifies against the same key and covers
+     * the same elements: it grants an attacker nothing, because producing a signature that covers anything else
+     * needs the key. What does the protecting is the pair of rules below rather than a count.
+     */
+    public function test_duplicate_signature_is_accepted_by_php_and_adds_nothing(): void
     {
-        $tampered = Wsse::duplicateSignature(Wsse::sign());
+        $duplicated = Wsse::duplicateSignature(Wsse::sign());
 
-        self::assertPhpRejects($tampered, [Part::body(), Part::timestamp()]);
+        $this->phpVerify($duplicated, [Part::body(), Part::timestamp()]);
+    }
+
+    public function test_a_second_signature_that_does_not_verify_is_rejected_by_php(): void
+    {
+        // The first of the two rules: every signature must hold, so one an attacker touched refuses the message.
+        $duplicated = Wsse::duplicateSignature(Wsse::sign());
+        $dom = new \DOMDocument();
+        $dom->loadXML($duplicated);
+        $xpath = new \DOMXPath($dom);
+        $xpath->registerNamespace('ds', 'http://www.w3.org/2000/09/xmldsig#');
+        $value = $xpath->query('//ds:Signature[2]//ds:SignatureValue')->item(0);
+        self::assertInstanceOf(\DOMElement::class, $value);
+        $encoded = trim($value->textContent);
+        $value->textContent = ($encoded[0] === 'A' ? 'B' : 'A').substr($encoded, 1);
+
+        self::assertPhpRejects((string) $dom->saveXML(), [Part::body(), Part::timestamp()]);
     }
 
     public function test_garbage_binary_security_token_is_rejected_by_php(): void
