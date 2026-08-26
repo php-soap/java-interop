@@ -22,11 +22,19 @@ SUITE_ARG = $(if $(SUITE),--testsuite $(SUITE),)
 # ../psr18-attachments-middleware), which are checked out on their feature branches and carry the
 # new code. Run composer against that copy via COMPOSER=composer.run.json.
 #
+# A path repo takes its version from the branch name, so the committed constraint only resolves while
+# the sibling sits on a branch that matches it. The constraint is rewritten to whatever branch is
+# actually checked out, which is why a feature branch needs no manual step and no committed pin.
+#
 # Post-merge (both feature branches on main, new code on Packagist): the sibling repos are no longer
 # needed, and this whole dance can collapse to a plain `composer install --no-interaction`.
+WSSE_BRANCH = $(shell git -C ../http-wsse-middleware rev-parse --abbrev-ref HEAD)
+
 RUN_PHP = cp composer.json composer.run.json && \
 	COMPOSER=composer.run.json composer config repositories.wsse path ../http-wsse-middleware && \
 	COMPOSER=composer.run.json composer config repositories.attachments path ../psr18-attachments-middleware && \
+	COMPOSER=composer.run.json composer require --no-update --no-interaction \
+	  php-soap/psr18-wsse-middleware:dev-$(WSSE_BRANCH) && \
 	COMPOSER=composer.run.json composer update --no-interaction && \
 	vendor/bin/phpunit $(SUITE_ARG)
 
