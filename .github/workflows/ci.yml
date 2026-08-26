@@ -1,8 +1,9 @@
 name: ci
 
-# The harness's own self-test, on PHP 8.4 and 8.5. The committed composer.json declares no
-# repositories and requires the middlewares at @dev, so this resolves them from Packagist. It turns
-# green once the middleware changes the harness exercises are released to their main branches.
+# The harness's own self-test, on PHP 8.4 and 8.5. The committed composer.json declares no repositories, so
+# this resolves the middlewares from Packagist: the WSSE one from its active development branch, v4.x, rather
+# than from the stale default branch. It turns green once the middleware changes the harness exercises have
+# landed there.
 on:
   push:
   pull_request:
