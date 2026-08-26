@@ -18,6 +18,8 @@ use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
 use Soap\Psr18WsseMiddleware\KeyStore\Key;
 use Soap\Psr18WsseMiddleware\KeyStore\TrustStore;
+use Soap\Psr18WsseMiddleware\Algorithm\SignatureCanonicalization;
+use Soap\Psr18WsseMiddleware\XmlSecurity\Canonicalization\DomCanonicalizer;
 use Soap\Psr18WsseMiddleware\WSSecurity\Attachment\AttachmentParts;
 use Soap\Psr18WsseMiddleware\WSSecurity\Attachment\MimeHeaderBlock;
 use Soap\Psr18WsseMiddleware\WSSecurity\Exception\SecurityFault;
@@ -459,45 +461,7 @@ final class AttachmentSecurityTest extends InteropTestCase
             );
     }
 
-    // ---------------------------------------------------------------- the pinned refusals
-
-    /**
-     * @param non-empty-string $mimeType
-     */
-    #[DataProvider('canonicalizedMediaTypes')]
-    public function test_php_refuses_to_sign_a_canonicalized_attachment(string $mimeType, string $reason): void
-    {
-        // Pinned rather than incidental. WSS4J's AttachmentContentSignatureTransform canonicalizes both
-        // families before digesting, so signing one here would produce a digest it rejects. The companion
-        // case below is the evidence for that claim rather than a reading of the profile.
-        $storage = new AttachmentStorage();
-        $storage->requestAttachments()->add(new Attachment(
-            '<'.self::CID.'>',
-            'file',
-            'note.txt',
-            $mimeType,
-            $this->stream("line one\nline two\n"),
-        ));
-
-        $document = Document::fromXmlString(self::envelope());
-
-        $this->expectException(SigningFailed::class);
-        $this->expectExceptionMessage($reason);
-
-        (new Outbound\Signature($this->clientCertificate()))
-            ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Content))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
-            );
-    }
-
-    /**
-     * @return iterable<string, array{0: non-empty-string, 1: string}>
-     */
-    public static function canonicalizedMediaTypes(): iterable
-    {
-        yield 'xml' => ['application/xml', 'XML canonicalization, which is not supported'];
-        yield 'an xml suffix' => ['application/soap+xml', 'XML canonicalization, which is not supported'];
-    }
+    // ---------------------------------------------------------------- the pinned canonical forms
 
     public function test_wss4j_digests_a_text_attachment_over_normalized_line_endings(): void
     {
@@ -526,6 +490,83 @@ final class AttachmentSecurityTest extends InteropTestCase
             $published,
             'and so must not digest the octets on the wire, which is what this package would sign',
         );
+    }
+
+    /**
+     * Shapes where the canonical form differs from the octets, so agreeing is a real assertion rather than a
+     * coincidence: a processing instruction outside the root, an unused namespace declaration, unordered
+     * attributes, a comment, a self-closing tag and an XML declaration.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function xmlShapes(): iterable
+    {
+        yield 'a processing instruction outside the root' => [
+            '<?xml version="1.0"?>'."\n".'<?pi target?>'."\n".'<root xmlns="urn:r"><a/></root>',
+        ];
+        yield 'an unused namespace and unordered attributes' => [
+            '<r:root xmlns:r="urn:r" xmlns:unused="urn:unused" b="2" a="1"><!-- c --><r:child/></r:root>',
+        ];
+        yield 'a default namespace redeclared on a child' => [
+            '<root xmlns="urn:r"><a xmlns="urn:other"><b/></a></root>',
+        ];
+    }
+
+    #[DataProvider('xmlShapes')]
+    public function test_php_verifies_an_xml_attachment_wss4j_signed(string $payload): void
+    {
+        [$document, $storage] = $this->javaSecured($payload, signAttachments: true, mimeType: 'application/xml');
+
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))(
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+            );
+
+        self::assertSame(
+            $payload,
+            $this->onlyAttachment($storage)->content->rewind()->getContents(),
+            'the attachment travels unmodified; only the digest is taken over the canonical form',
+        );
+    }
+
+    #[DataProvider('xmlShapes')]
+    public function test_wss4j_verifies_an_xml_attachment_php_signed(string $payload): void
+    {
+        // The other direction, which is what says the two canonicalizations agree rather than merely both
+        // existing: PHP computes the digest and WSS4J recomputes it its own way.
+        $result = $this->javaCheck(
+            $this->phpSecure($payload, sign: true, mimeType: 'application/xml'),
+            signAttachments: true,
+        );
+
+        self::assertTrue($result['valid'], 'WSS4J rejected a PHP-signed XML attachment: '.($result['error'] ?? ''));
+        self::assertContains(
+            hash('sha256', $payload),
+            $result['sha256'],
+            'the octets must still travel unmodified',
+        );
+    }
+
+    public function test_php_refuses_an_xml_attachment_carrying_a_doctype(): void
+    {
+        // WSS4J's parser refuses a doctype outright, so refusing is what keeps the two sides agreeing rather
+        // than a restriction this package invented.
+        $storage = new AttachmentStorage();
+        $storage->requestAttachments()->add(new Attachment(
+            '<'.self::CID.'>',
+            'doc',
+            'doc.xml',
+            'application/xml',
+            MemoryStream::create()->write('<!DOCTYPE root><root/>')->rewind(),
+        ));
+
+        $this->expectException(SigningFailed::class);
+        $this->expectExceptionMessage('could not be read as a document');
+
+        (new Outbound\Signature($this->clientCertificate()))
+            ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Content))(
+                new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile()),
+            );
     }
 
     /** The ds:DigestValue of the ds:Reference covering the attachment. */
