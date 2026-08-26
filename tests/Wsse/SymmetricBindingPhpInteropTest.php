@@ -405,9 +405,10 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         $secret = $this->preSharedKey();
 
         // No private key anywhere: nothing was wrapped, so there is nothing to unwrap.
-        (new Inbound\Decrypt($secret))($this->context($document, $keys));
-        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
-            ->withPreSharedKey($secret)($this->context($document, $keys));
+        (new Inbound\Decrypt(preSharedKey: $secret))($this->context($document, $keys));
+        (new Inbound\VerifySignature($this->trustStore(), $secret, signed: [Part::body()]))(
+            $this->context($document, $keys),
+        );
 
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $document->toXmlString());
     }
@@ -428,7 +429,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         );
 
         $this->expectException(SecurityFault::class);
-        (new Inbound\Decrypt($other))($this->context($document, new ExchangeKeys()));
+        (new Inbound\Decrypt(preSharedKey: $other))($this->context($document, new ExchangeKeys()));
     }
 
     /** The secret and name this harness pretends the two sides agreed out of band. */
