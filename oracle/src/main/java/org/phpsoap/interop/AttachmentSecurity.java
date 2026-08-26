@@ -31,6 +31,7 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -78,6 +79,15 @@ final class AttachmentSecurity {
         final boolean sawSignature;
         final boolean sawEncryption;
 
+        /**
+         * The soap:Body as it stands once the engine is done with it.
+         *
+         * Reported because "the header processed" is not the same claim as "the content came back". Where the
+         * body itself was encrypted, nothing in the attachment digests says whether it was opened, and an
+         * engine that quietly did nothing also does not fail.
+         */
+        final String body;
+
         CheckResult(
                 boolean ok,
                 List<String> problems,
@@ -85,7 +95,8 @@ final class AttachmentSecurity {
                 List<String> rawAttachmentSha256,
                 List<String> attachmentHeaderBlocks,
                 boolean sawSignature,
-                boolean sawEncryption) {
+                boolean sawEncryption,
+                String body) {
             this.ok = ok;
             this.problems = problems;
             this.attachmentSha256 = attachmentSha256;
@@ -93,6 +104,7 @@ final class AttachmentSecurity {
             this.attachmentHeaderBlocks = attachmentHeaderBlocks;
             this.sawSignature = sawSignature;
             this.sawEncryption = sawEncryption;
+            this.body = body;
         }
     }
 
@@ -155,7 +167,8 @@ final class AttachmentSecurity {
                     rawDigests,
                     headerBlocks,
                     false,
-                    false);
+                    false,
+                    "");
         }
 
         // Per action, the attachments it actually covered. WSS4J marks a data reference as an attachment and
@@ -196,7 +209,14 @@ final class AttachmentSecurity {
         }
 
         return new CheckResult(
-                problems.isEmpty(), problems, digests, rawDigests, headerBlocks, sawSignature, sawEncryption);
+                problems.isEmpty(),
+                problems,
+                digests,
+                rawDigests,
+                headerBlocks,
+                sawSignature,
+                sawEncryption,
+                Xml.serialize(document));
     }
 
     /** The bare Content-IDs the given action covered, taken from the data references WSS4J reports. */
@@ -249,7 +269,9 @@ final class AttachmentSecurity {
         Document document = message.getSOAPPart().getEnvelope().getOwnerDocument();
 
         List<Attachment> parts = attachmentsOf(message);
-        if (parts.isEmpty()) {
+        // storeBytesInAttachment mints the only part such a message needs, so it is the one scenario where
+        // arriving without an attachment is the normal case rather than a caller mistake.
+        if (parts.isEmpty() && !config.storeBytesInAttachment) {
             throw new IllegalArgumentException("The request carried no attachment to secure.");
         }
 
@@ -272,14 +294,19 @@ final class AttachmentSecurity {
             signature.setDigestAlgo(WSConstants.SHA256);
             signature.setSigCanonicalization(Signer.canonicalizationUri(config.canonicalization));
             signature.setAttachmentCallbackHandler(signHandler);
+            // Moves the wsse:BinarySecurityToken bytes into a part of their own, leaving an xop:Include in
+            // the token. WSS4J always expands that again on the way in when the token is signed.
+            signature.setStoreBytesInAttachment(config.storeBytesInAttachment);
 
             signature.getParts().add(
                     new WSEncryptionPart(WSConstants.ELEM_BODY, soapNamespace(document), "Content"));
             if (config.requireTimestamp) {
                 signature.getParts().add(new WSEncryptionPart("Timestamp", WSConstants.WSU_NS, "Element"));
             }
-            signature.getParts().add(
-                    new WSEncryptionPart(ALL_ATTACHMENTS, config.attachmentSignatureCoverage));
+            if (config.signAttachments && !parts.isEmpty()) {
+                signature.getParts().add(
+                        new WSEncryptionPart(ALL_ATTACHMENTS, config.attachmentSignatureCoverage));
+            }
 
             signature.build(crypto);
         }
@@ -288,7 +315,7 @@ final class AttachmentSecurity {
         List<Attachment> current = signHandler.results().isEmpty() ? parts : signHandler.results();
 
         AttachmentCallbackHandler encryptHandler = new AttachmentCallbackHandler(current);
-        if (config.encryptAttachments) {
+        if (config.encryptAttachments || config.storeBytesInAttachment) {
             WSSecEncrypt encrypt = new WSSecEncrypt(header);
             encrypt.setUserInfo(config.encryptionRecipientAlias);
             encrypt.setKeyIdentifierType(Encryptor.keyIdentifierType(config.encryptionKeyReference));
@@ -297,27 +324,59 @@ final class AttachmentSecurity {
             encrypt.setDigestAlgorithm(Encryptor.oaepDigestAlgorithm(config.oaepDigest));
             encrypt.setMGFAlgorithm(Encryptor.oaepMgfAlgorithm(config.oaepDigest));
             encrypt.setAttachmentCallbackHandler(encryptHandler);
+            // Both cipher values move: the wrapped key in the header and the data in the body.
+            encrypt.setStoreBytesInAttachment(config.storeBytesInAttachment);
 
             if (config.requireEncryption) {
                 encrypt.getParts().add(
                         new WSEncryptionPart(WSConstants.ELEM_BODY, soapNamespace(document), "Content"));
             }
-            encrypt.getParts().add(
-                    new WSEncryptionPart(ALL_ATTACHMENTS, config.attachmentEncryptionCoverage));
+            if (config.encryptAttachments) {
+                encrypt.getParts().add(
+                        new WSEncryptionPart(ALL_ATTACHMENTS, config.attachmentEncryptionCoverage));
+            }
 
             KeyGenerator keyGen = KeyGenerator.getInstance("AES");
             keyGen.init(256);
             SecretKey sessionKey = keyGen.generateKey();
 
             encrypt.build(crypto, sessionKey);
-            // The xenc:EncryptedData elements describing the attachments are produced separately from the
-            // in-document ones and have to be attached to the header explicitly.
-            encrypt.addAttachmentEncryptedDataElements();
+            if (config.encryptAttachments) {
+                // The xenc:EncryptedData elements describing the attachments are produced separately from the
+                // in-document ones and have to be attached to the header explicitly.
+                encrypt.addAttachmentEncryptedDataElements();
+            }
 
-            current = encryptHandler.results().isEmpty() ? current : encryptHandler.results();
+            // Merged rather than replaced. WSS4J hands back the parts it touched, which under
+            // storeBytesInAttachment alone is the minted cipher part and nothing else: taking the results as
+            // the new list would drop every attachment the message actually arrived with.
+            current = merge(current, encryptHandler.results());
         }
 
         return emit(document, current, protocol);
+    }
+
+    /**
+     * The attachments as they stand after a WSS4J pass: the ones it handed back, plus the ones it left alone.
+     *
+     * A transformed part replaces the one it came from, matched on its bare id, and a part WSS4J minted is
+     * simply new. Order follows the message, with anything minted last, which is where a peer writing this
+     * shape puts it.
+     */
+    private static List<Attachment> merge(List<Attachment> current, List<Attachment> results) {
+        if (results.isEmpty()) {
+            return current;
+        }
+
+        Map<String, Attachment> byId = new LinkedHashMap<>();
+        for (Attachment part : current) {
+            byId.put(bare(part.getId()), part);
+        }
+        for (Attachment part : results) {
+            byId.put(bare(part.getId()), part);
+        }
+
+        return new ArrayList<>(byId.values());
     }
 
     /** Rebuilds a multipart body from the secured SOAP part and the (possibly transformed) attachments. */

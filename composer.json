@@ -12,7 +12,7 @@
         "php": "~8.4.0 || ~8.5.0",
         "ext-dom": "*",
         "ext-openssl": "*",
-        "php-soap/psr18-wsse-middleware": "4.x-dev",
+        "php-soap/psr18-wsse-middleware": "dev-feature/optimized-cipher-bytes || 4.x-dev",
         "php-soap/psr18-attachments-middleware": "@dev",
         "nyholm/psr7": "^1.8",
         "symfony/http-client": "^7.1"

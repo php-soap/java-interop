@@ -41,6 +41,17 @@ public final class ScenarioConfig {
 
     /** The same choice for encryption, which no policy validates but a default-configured sender emits. */
     public String attachmentEncryptionCoverage = "Content";
+
+    /**
+     * Put the cipher bytes in a MIME part and leave an {@code xop:Include} in the {@code xenc:CipherValue},
+     * instead of base64 in the XML. Also moves a {@code wsse:BinarySecurityToken} the same way when signing.
+     *
+     * <p>False here matches bare WSS4J. It does not match the peers that matter: Apache CXF turns this on by
+     * default whenever MTOM is enabled, and .NET and Metro do it to any large encrypted content
+     * unconditionally. So this flag is how the harness reproduces what a default-configured peer sends,
+     * rather than an exotic option somebody opted into.
+     */
+    public boolean storeBytesInAttachment = false;
     public boolean requireUsernameToken = false; // enforce/produce wsse:UsernameToken
     public boolean requireSaml = false;          // enforce/produce a saml:Assertion in the Security header
 
@@ -152,6 +163,8 @@ public final class ScenarioConfig {
         config.requireEncryption = boolProp(props, "require.encryption", config.requireEncryption);
         config.signAttachments = boolProp(props, "attachments.sign", config.signAttachments);
         config.encryptAttachments = boolProp(props, "attachments.encrypt", config.encryptAttachments);
+        config.storeBytesInAttachment =
+                boolProp(props, "attachments.storeBytes", config.storeBytesInAttachment);
         config.attachmentSignatureCoverage =
                 props.getProperty("attachments.signCoverage", config.attachmentSignatureCoverage).trim();
         config.attachmentEncryptionCoverage =

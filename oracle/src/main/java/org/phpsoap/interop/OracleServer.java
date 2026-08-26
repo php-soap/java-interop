@@ -293,7 +293,7 @@ public final class OracleServer {
             // A refusal is a result, not a server error: the PHP side asserts on valid:false.
             respond(exchange, 200, "application/json",
                     "{\"valid\":false,\"error\":\"" + escapeJson(rootMessage(e))
-                            + "\",\"sha256\":[],\"rawSha256\":[],\"headerBlocks\":[]}");
+                            + "\",\"sha256\":[],\"rawSha256\":[],\"headerBlocks\":[],\"body\":\"\"}");
             return;
         }
 
@@ -307,7 +307,8 @@ public final class OracleServer {
                         + ",\"encryption\":" + result.sawEncryption
                         + ",\"sha256\":" + shas
                         + ",\"rawSha256\":" + rawShas
-                        + ",\"headerBlocks\":" + jsonStringArray(result.attachmentHeaderBlocks) + "}");
+                        + ",\"headerBlocks\":" + jsonStringArray(result.attachmentHeaderBlocks)
+                        + ",\"body\":\"" + escapeJson(result.body) + "\"}");
     }
 
     /** The SOAP envelope the emit op wraps: a plain Body for SwA, one carrying an xop:Include for MTOM. */
@@ -362,6 +363,12 @@ public final class OracleServer {
         }
         if (q.containsKey("encatt")) {
             config.encryptAttachments = Boolean.parseBoolean(q.get("encatt"));
+        }
+        if (q.containsKey("reqenc")) {
+            config.requireEncryption = Boolean.parseBoolean(q.get("reqenc"));
+        }
+        if (q.containsKey("storebytes")) {
+            config.storeBytesInAttachment = Boolean.parseBoolean(q.get("storebytes"));
         }
         if (q.containsKey("signcover")) {
             config.attachmentSignatureCoverage = q.get("signcover");
