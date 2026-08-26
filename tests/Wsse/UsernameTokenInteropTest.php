@@ -50,9 +50,9 @@ final class UsernameTokenInteropTest extends InteropTestCase
 
         (new Outbound\Timestamp())($context);
         (new Outbound\Username('interop-user', 'interop-secret', false))($context);
-        (new Outbound\Signature(
+        (new Outbound\Signature(new Outbound\CertificateSigningKey(
             ClientCertificate::fromFile(Oracle::certPath('php-client.pem')),
-        ))->withParts([Part::body(), Part::timestamp(), Part::usernameToken()])($context);
+        )))->withParts([Part::body(), Part::timestamp(), Part::usernameToken()])($context);
 
         $response = Oracle::post('/verify?ut=true&user=interop-user&pass=interop-secret', $document->toXmlString());
 

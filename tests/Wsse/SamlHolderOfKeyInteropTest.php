@@ -110,7 +110,10 @@ final class SamlHolderOfKeyInteropTest extends InteropTestCase
         // child of the Security header, which here includes the assertion. Signing the assertion mints a
         // wsu:Id on it, and that attribute is inside what the issuer's own enveloped signature covers, so
         // stamping it invalidates the very assertion the reference depends on.
-        (new Outbound\Signature($clientCertificate, keyRef: Outbound\KeyReference\KeyRef::SamlAssertion))
+        (new Outbound\Signature(new Outbound\CertificateSigningKey(
+            $clientCertificate,
+            Outbound\KeyReference\KeyRef::SamlAssertion,
+        )))
             ->withParts([Part::body(), Part::timestamp()])($context);
 
         return $document->toXmlString();

@@ -16,7 +16,11 @@ import java.util.List;
  * correct against WSS4J. The engine resolves the recipient key from the keystore via the WSSE key reference
  * the PHP side embedded (Subject Key Identifier, BST, IssuerSerial, ...).
  *
- * <p>A {@link CallbackHandlerStub} supplies the keystore password so the engine can unlock the private key.
+ * <p>A {@link CallbackHandlerStub} supplies the keystore password so the engine can unlock the private key, and
+ * a {@link SessionKeyCallbackHandler} wraps it for the same reason the verifier needs one: an
+ * {@code #EncryptedKeySHA1} reference is resolved through a callback and nowhere else, so a message whose
+ * {@code xenc:EncryptedData} names its key that way cannot be opened without it. A symmetric binding names it
+ * that way in both places, which is what makes the two blocks the same key to a reader.
  */
 final class Decryptor {
 
@@ -34,7 +38,7 @@ final class Decryptor {
         RequestData data = new RequestData();
         data.setDecCrypto(crypto);
         data.setSigVerCrypto(crypto);
-        data.setCallbackHandler(new CallbackHandlerStub(keyPassword));
+        data.setCallbackHandler(new SessionKeyCallbackHandler(new CallbackHandlerStub(keyPassword), data));
         data.setWssConfig(org.apache.wss4j.dom.engine.WSSConfig.getNewInstance());
 
         WSSecurityEngine engine = new WSSecurityEngine();

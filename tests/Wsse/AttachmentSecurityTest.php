@@ -35,6 +35,10 @@ use Soap\Psr18WsseMiddleware\XmlSecurity\ExternalPartCoverage;
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use VeeWee\Xml\Dom\Document;
+use Soap\Psr18WsseMiddleware\Algorithm\SignatureMethod;
+use Soap\Psr18WsseMiddleware\WSSecurity\Outbound\KeyReference\EncKeyRef;
+use Soap\Psr18WsseMiddleware\XmlSecurity\CryptoPolicy;
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys;
 
 /**
  * WS-Security over SOAP attachments, cross-checked against Apache WSS4J in all four directions.
@@ -244,7 +248,7 @@ final class AttachmentSecurityTest extends InteropTestCase
             SoapVersion::Soap11,
             new SecurityProfile(),
         ));
-        (new Outbound\Signature($this->clientCertificate()))
+        (new Outbound\Signature(new Outbound\CertificateSigningKey($this->clientCertificate())))
             ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Complete))($context);
 
         $result = $this->javaCheck(
@@ -433,7 +437,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         $this->expectException(UnsupportedAttachmentHeaderForm::class);
         $this->expectExceptionMessage('"Content-Description" is the one header');
 
-        (new Outbound\Signature($this->clientCertificate()))
+        (new Outbound\Signature(new Outbound\CertificateSigningKey($this->clientCertificate())))
             ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Complete))(
                 new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile()),
             );
@@ -455,7 +459,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         $this->expectException(UnsupportedAttachmentHeaderForm::class);
         $this->expectExceptionMessage('"Content-Type" carries a comment');
 
-        (new Outbound\Signature($this->clientCertificate()))
+        (new Outbound\Signature(new Outbound\CertificateSigningKey($this->clientCertificate())))
             ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Complete))(
                 new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile()),
             );
@@ -634,7 +638,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         $this->expectException(SigningFailed::class);
         $this->expectExceptionMessage('could not be read as a document');
 
-        (new Outbound\Signature($this->clientCertificate()))
+        (new Outbound\Signature(new Outbound\CertificateSigningKey($this->clientCertificate())))
             ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Content))(
                 new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile()),
             );
@@ -733,12 +737,12 @@ final class AttachmentSecurityTest extends InteropTestCase
         (new Outbound\Timestamp(300))($context);
 
         if ($sign) {
-            (new Outbound\Signature($this->clientCertificate()))
+            (new Outbound\Signature(new Outbound\CertificateSigningKey($this->clientCertificate())))
                 ->withAttachments(AttachmentParts::request($storage, $coverage))($context);
         }
 
         if ($encrypt) {
-            (new Outbound\Encryption($this->recipientCertificate()))
+            (new Outbound\Encryption(new Keys\WrappedSessionKey($this->recipientCertificate())))
                 ->withParts([])
                 ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Content))($context);
         }
@@ -753,6 +757,57 @@ final class AttachmentSecurityTest extends InteropTestCase
         }
 
         return $this->pack($document->toXmlString(), $storage, $type);
+    }
+
+    /**
+     * WSS4J cannot read an attachment encrypted under a key a signature also uses, and this pins that.
+     *
+     * Sharing the key detaches the xenc:ReferenceList, and a detached list is what makes each
+     * xenc:EncryptedData name its own key by an #EncryptedKeySHA1 identifier. WSS4J reads exactly that for an
+     * in-document part, and its attachment path does not: an xenc:EncryptedData carrying a
+     * xenc:CipherReference is resolved through Santuario, which has never heard of a
+     * wsse:SecurityTokenReference and reports unsupportedKeyId. Adding the session-key callback the verifier
+     * and the decryptor use does not help, because the refusal happens before any callback is consulted.
+     *
+     * Nothing here is broken: this is a peer limitation on one combination, and it is pinned rather than
+     * skipped so that a WSS4J release which lifts it shows up as a failing assertion. Encrypt attachments
+     * under a key of their own, which is the ordinary configuration and which the tests above cover.
+     */
+    public function test_wss4j_cannot_read_an_attachment_encrypted_under_a_shared_key(): void
+    {
+        $storage = new AttachmentStorage();
+        $storage->requestAttachments()->add(new Attachment(
+            '<invoice@example.com>',
+            'file',
+            'invoice.pdf',
+            'application/pdf',
+            $this->stream('%PDF-1.7 shared-key invoice'),
+        ));
+
+        $document = Document::fromXmlString(self::envelope(AttachmentType::Swa));
+        $context = new WsseContext($document, self::soapVersionFor(AttachmentType::Swa), new SecurityProfile(
+            crypto: new CryptoPolicy(acceptedSignatureMethods: [SignatureMethod::HMAC_SHA256]),
+        ));
+
+        // One source handed to both blocks, so the signature is an HMAC keyed by the same key the attachment is
+        // encrypted under.
+        $sessionKey = new Keys\WrappedSessionKey($this->recipientCertificate(), EncKeyRef::Thumbprint);
+
+        (new Outbound\Timestamp(300))($context);
+        (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
+            ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
+            ->withParts([Part::body(), Part::timestamp()])($context);
+        (new Outbound\Encryption($sessionKey))
+            ->withParts([])
+            ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Content))($context);
+
+        $result = $this->javaCheck(
+            $this->pack($document->toXmlString(), $storage),
+            encryptAttachments: true,
+        );
+
+        self::assertFalse($result['valid'], 'WSS4J read a shared-key attachment; this limitation may have been lifted');
+        self::assertStringContainsString('unsupportedKeyId', (string) ($result['error'] ?? ''));
     }
 
     /** Packs a SOAP part plus the storage's request attachments into a multipart request. */

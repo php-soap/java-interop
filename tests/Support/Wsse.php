@@ -10,6 +10,7 @@ use Soap\Psr18WsseMiddleware\Algorithm\SignatureMethod;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
 use Soap\Psr18WsseMiddleware\KeyStore\Pkcs12Bundle;
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
@@ -55,7 +56,11 @@ final class Wsse
 
         (new Outbound\Timestamp($timestampTtl))($context);
 
-        $signature = new Outbound\Signature($clientCertificate, keyRef: $keyRef);
+        $signature = new Outbound\Signature(new Outbound\CertificateSigningKey(
+            $clientCertificate,
+            $keyRef,
+            $bundle?->chain,
+        ));
         if ($signatureMethod !== null) {
             $signature = $signature->withSignatureMethod($signatureMethod);
         }
@@ -67,9 +72,6 @@ final class Wsse
         }
         if ($inclusivePrefixes) {
             $signature = $signature->withInclusivePrefixes();
-        }
-        if ($bundle !== null) {
-            $signature = $signature->withCertificatePath($bundle->chain);
         }
         $signature($context);
 
@@ -87,13 +89,15 @@ final class Wsse
         $document = Document::fromXmlString($inputXml ?? Oracle::sampleEnvelope());
         $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
 
-        $recipient = Certificate::fromFile($recipientCertFile);
-        $encryption = new Outbound\Encryption($recipient, encKeyRef: $encKeyRef);
+        // The recipient reference and the key transport describe how the session key reaches its recipient, so
+        // they live on the key source rather than on the block.
+        $encryption = new Outbound\Encryption(new Keys\WrappedSessionKey(
+            Certificate::fromFile($recipientCertFile),
+            $encKeyRef,
+            keyTransportAlgorithm: $keyTransport,
+        ));
         if ($dataMethod !== null) {
             $encryption = $encryption->withDataEncryptionMethod($dataMethod);
-        }
-        if ($keyTransport !== null) {
-            $encryption = $encryption->withKeyTransportAlgorithm($keyTransport);
         }
         $encryption($context);
 

@@ -26,6 +26,7 @@ use Soap\Psr18WsseMiddleware\XmlSecurity\ExternalPartCoverage;
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use VeeWee\Xml\Dom\Document;
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys;
 
 /**
  * Cipher bytes travelling in MIME parts instead of base64 in the XML, cross-checked against Apache WSS4J.
@@ -173,7 +174,7 @@ final class OptimizedCipherBytesInteropTest extends InteropTestCase
             (string) file_get_contents(dirname(__DIR__, 2).'/samples/request-unsigned-soap11.xml'),
         );
 
-        (new Outbound\Encryption($this->recipientCertificate()))
+        (new Outbound\Encryption(new Keys\WrappedSessionKey($this->recipientCertificate())))
             ->withOptimizedCipherBytes(AttachmentParts::request($storage, ExternalPartCoverage::Content))(
                 new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
             );
