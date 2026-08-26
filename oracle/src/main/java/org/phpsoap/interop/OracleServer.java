@@ -285,7 +285,7 @@ public final class OracleServer {
             // A refusal is a result, not a server error: the PHP side asserts on valid:false.
             respond(exchange, 200, "application/json",
                     "{\"valid\":false,\"error\":\"" + escapeJson(rootMessage(e))
-                            + "\",\"sha256\":[],\"rawSha256\":[]}");
+                            + "\",\"sha256\":[],\"rawSha256\":[],\"headerBlocks\":[]}");
             return;
         }
 

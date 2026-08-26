@@ -136,7 +136,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         [$document, $storage] = $this->javaSecured($payload, signAttachments: true, type: $type);
 
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
-            ->withAttachments(AttachmentParts::response($storage))(
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))(
                 new WsseContext($document, self::soapVersionFor($type), new SecurityProfile()),
             );
 
@@ -162,7 +162,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         );
 
         (new Inbound\Decrypt($this->privateKey()))
-            ->withAttachments(AttachmentParts::response($storage))(
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))(
                 new WsseContext($document, self::soapVersionFor($type), new SecurityProfile()),
             );
 
@@ -188,7 +188,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         $this->expectException(SecurityFault::class);
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
-            ->withAttachments(AttachmentParts::response($storage))(
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))(
                 new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
             );
     }
@@ -214,18 +214,26 @@ final class AttachmentSecurityTest extends InteropTestCase
         self::assertTrue($result['signature'], 'WSS4J saw no signature over the attachment');
     }
 
-    public function test_the_header_block_both_stacks_canonicalize_is_the_same(): void
+    /**
+     * Differential test against the reference implementation, one header shape per row.
+     *
+     * The canonicalizer's rules were written from a reading of what WSS4J does, and a reading is what this
+     * feature has already been caught out by once. Each row here is a rule stated as a claim and then
+     * measured: WSS4J is handed the same part, and both the block it canonicalized and the digest it took
+     * over that block have to agree with ours.
+     *
+     * The verification is the real assertion. The block comparison exists so a disagreement names itself
+     * instead of surfacing as a bare digest failure.
+     *
+     * @param list<array{string, string}> $headers
+     */
+    #[DataProvider('headerShapes')]
+    public function test_both_stacks_canonicalize_the_same_header_set_the_same_way(array $headers): void
     {
-        // The one thing a complete coverage can silently disagree on. A mismatch would otherwise surface as
-        // a bare digest failure, so the oracle reports the block it computed and this compares it against
-        // the block PHP composed for the same part.
         $storage = new AttachmentStorage();
-        $storage->requestAttachments()->add(new Attachment(
-            '<'.self::CID.'>',
-            'file',
-            'invoice.pdf',
-            'application/octet-stream',
-            $this->stream($payload = $this->ramp(64)),
+        $storage->requestAttachments()->add(Attachment::fromHeaders(
+            Headers::fromPairs([['Content-ID', '<'.self::CID.'>'], ...$headers]),
+            $this->stream($this->ramp(64)),
         ));
 
         $document = Document::fromXmlString(self::envelope());
@@ -243,13 +251,84 @@ final class AttachmentSecurityTest extends InteropTestCase
             signCoverage: 'Element',
         );
 
-        self::assertSame(
-            [(new MimeHeaderBlock())->canonicalize($storage->requestAttachments()->findById('<'.self::CID.'>')->headers())],
-            $result['headerBlocks'],
-            'the two stacks must canonicalize the same header set to the same octets',
+        $ours = (new MimeHeaderBlock())->canonicalize(
+            $storage->requestAttachments()->findById('<'.self::CID.'>')->headers()
         );
-        self::assertNotSame('', $payload);
+
+        // The block comparison comes first and carries both forms, because a disagreement otherwise
+        // surfaces as nothing more useful than "the signature was invalid".
+        self::assertSame(
+            [$ours],
+            $result['headerBlocks'],
+            "the two stacks canonicalized this header set differently.\n"
+            ."ours:  ".var_export($ours, true)."\n"
+            ."theirs: ".var_export($result['headerBlocks'], true)."\n",
+        );
+        self::assertTrue(
+            $result['valid'],
+            'WSS4J rejected a signature over this header set: '.($result['error'] ?? ''),
+        );
+        self::assertTrue($result['signature'], 'WSS4J saw no signature over the attachment');
     }
+
+    /**
+     * One row per canonicalization rule, so a rule that turns out to be a misreading fails on its own line.
+     *
+     * @return iterable<string, array{0: list<array{string, string}>}>
+     */
+    public static function headerShapes(): iterable
+    {
+        yield 'the set this package derives' => [[
+            ['Content-Type', 'application/octet-stream'],
+            ['Content-Disposition', 'attachment; name="invoice"; filename="invoice.pdf"'],
+        ]];
+
+        yield 'a media type with no parameters keeps its case' => [[
+            ['Content-Type', 'APPLICATION/Octet-Stream'],
+        ]];
+
+        yield 'a parameterized media type is lowercased' => [[
+            ['Content-Type', 'APPLICATION/Octet-Stream; CharSet=UTF-8'],
+        ]];
+
+        yield 'parameters are sorted' => [[
+            ['Content-Type', 'application/octet-stream; zoom=3; alpha=1'],
+        ]];
+
+        yield 'bare parameter values are quoted' => [[
+            ['Content-Type', 'application/octet-stream; version=1.7'],
+        ]];
+
+        yield 'quoted parameter values stay quoted once' => [[
+            ['Content-Type', 'application/octet-stream; version="1.7"'],
+        ]];
+
+        yield 'a filename loses its case and a name does not' => [[
+            ['Content-Type', 'application/octet-stream'],
+            ['Content-Disposition', 'attachment; name="Invoice"; filename="Invoice.PDF"'],
+        ]];
+
+        yield 'leading whitespace is stripped' => [[
+            ['Content-Type', "\t application/octet-stream"],
+        ]];
+
+        yield 'a Content-Location is considered' => [[
+            ['Content-Type', 'application/octet-stream'],
+            ['Content-Location', 'http://example.com/invoice.pdf'],
+        ]];
+
+        yield 'a header it does not consider is ignored' => [[
+            ['Content-Type', 'application/octet-stream'],
+            ['X-Whatever', 'ignored'],
+        ]];
+
+        yield 'every header it covers at once' => [[
+            ['Content-Type', 'application/octet-stream; charset=UTF-8'],
+            ['Content-Disposition', 'attachment; filename="Invoice.PDF"; name="Invoice"'],
+            ['Content-Location', 'http://example.com/invoice.pdf'],
+        ]];
+    }
+
 
     #[DataProvider('packagings')]
     public function test_php_verifies_an_attachment_wss4j_covered_completely(AttachmentType $type): void
@@ -333,6 +412,31 @@ final class AttachmentSecurityTest extends InteropTestCase
         self::assertContains(hash('sha256', $payload), $result['sha256']);
     }
 
+    public function test_php_refuses_to_cover_a_content_description(): void
+    {
+        // Measured, not read. This provider used to carry a Content-Description row and WSS4J answered
+        // "the signature or decryption was invalid" for it: that header is the one of the five a peer
+        // canonicalizes without stripping the whitespace a MIME parser leaves after the colon, so its
+        // digest turns on whether the peer's own parser trimmed the separator. Refused rather than guessed.
+        $storage = new AttachmentStorage();
+        $storage->requestAttachments()->add(Attachment::fromHeaders(
+            Headers::fromPairs([
+                ['Content-ID', '<'.self::CID.'>'],
+                ['Content-Type', 'application/octet-stream'],
+                ['Content-Description', 'an invoice'],
+            ]),
+            $this->stream($this->ramp(64)),
+        ));
+
+        $this->expectException(UnsupportedAttachmentHeaderForm::class);
+        $this->expectExceptionMessage('"Content-Description" is the one header');
+
+        (new Outbound\Signature($this->clientCertificate()))
+            ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Complete))(
+                new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile()),
+            );
+    }
+
     public function test_php_refuses_to_cover_a_header_it_cannot_canonicalize(): void
     {
         // Pinned as deliberate rather than incidental. A guessed canonicalization is a wrong digest with no
@@ -381,7 +485,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         $this->expectExceptionMessage($reason);
 
         (new Outbound\Signature($this->clientCertificate()))
-            ->withAttachments(AttachmentParts::request($storage))(
+            ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Content))(
                 new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
             );
     }
@@ -445,7 +549,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         [$document, $storage] = $this->javaSecured($payload, signAttachments: true, mimeType: 'text/plain');
 
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
-            ->withAttachments(AttachmentParts::response($storage))(
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))(
                 new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
             );
 
@@ -505,7 +609,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         if ($encrypt) {
             (new Outbound\Encryption($this->recipientCertificate()))
                 ->withParts([])
-                ->withAttachments(AttachmentParts::request($storage))($context);
+                ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Content))($context);
         }
 
         if ($tamper) {

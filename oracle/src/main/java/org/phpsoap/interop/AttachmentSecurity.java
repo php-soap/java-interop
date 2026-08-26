@@ -141,7 +141,22 @@ final class AttachmentSecurity {
         data.setTimeStampTTL(config.timestampTimeToLiveSeconds);
         data.setTimeStampFutureTTL(config.timestampFutureTimeToLiveSeconds);
 
-        WSHandlerResult handlerResult = new WSSecurityEngine().processSecurityHeader(document, data);
+        WSHandlerResult handlerResult;
+        try {
+            handlerResult = new WSSecurityEngine().processSecurityHeader(document, data);
+        } catch (Exception refused) {
+            // A refusal is a result, not a server error, and this is the one case the header blocks are
+            // worth reporting: a complete coverage that disagrees surfaces as nothing but an invalid
+            // signature, so the far side needs the block this stack canonicalized to compare against.
+            return new CheckResult(
+                    false,
+                    List.of(rootMessage(refused)),
+                    List.of(),
+                    rawDigests,
+                    headerBlocks,
+                    false,
+                    false);
+        }
 
         // Per action, the attachments it actually covered. WSS4J marks a data reference as an attachment and
         // records the cid: URI it named, so this distinguishes "the message carried a signature" from "the
@@ -185,6 +200,15 @@ final class AttachmentSecurity {
     }
 
     /** The bare Content-IDs the given action covered, taken from the data references WSS4J reports. */
+    private static String rootMessage(Throwable e) {
+        Throwable cur = e;
+        while (cur.getCause() != null && cur.getCause() != cur) {
+            cur = cur.getCause();
+        }
+
+        return cur.getMessage() != null ? cur.getMessage() : cur.getClass().getSimpleName();
+    }
+
     private static Set<String> coveredAttachments(WSHandlerResult handlerResult, int wanted) {
         Set<String> covered = new HashSet<>();
         for (WSSecurityEngineResult result : handlerResult.getResults()) {
