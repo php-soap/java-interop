@@ -174,10 +174,16 @@ final class OptimizedCipherBytesInteropTest extends InteropTestCase
             (string) file_get_contents(dirname(__DIR__, 2).'/samples/request-unsigned-soap11.xml'),
         );
 
-        (new Outbound\Encryption(new Keys\WrappedSessionKey($this->recipientCertificate())))
-            ->withOptimizedCipherBytes(AttachmentParts::request($storage, ExternalPartCoverage::Content))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
-            );
+        // Registered on both the key source and the block, which is what moves both cipher values: the wrapped
+        // key in the header is written by the source, the encrypted content by the block.
+        $carriers = AttachmentParts::request($storage, ExternalPartCoverage::Content);
+
+        (new Outbound\Encryption(new Keys\WrappedSessionKey(
+            $this->recipientCertificate(),
+            optimizedCipherBytes: $carriers,
+        )))->withOptimizedCipherBytes($carriers)(
+            new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+        );
 
         return $this->pack($document->toXmlString(), $storage);
     }
