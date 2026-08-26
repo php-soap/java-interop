@@ -16,6 +16,31 @@ public final class ScenarioConfig {
     public boolean requireTimestamp = true;
 
     public boolean requireEncryption = false;   // enforce/produce xenc:EncryptedData over the Body
+
+    /**
+     * Sign the message's attachments as well, per the WSS SwA Profile: a ds:Reference with a cid: URI and the
+     * Attachment-Content-Signature-Transform, in the same ds:Signature as the in-document references. What a
+     * {@code sp:Attachments} assertion under {@code sp:SignedParts} asks for.
+     */
+    public boolean signAttachments = false;
+
+    /**
+     * Encrypt the message's attachments as well: one xenc:EncryptedData per attachment carrying an
+     * xenc:CipherReference, under the same session key as any in-document parts. What a
+     * {@code sp:Attachments} assertion under {@code sp:EncryptedParts} asks for.
+     */
+    public boolean encryptAttachments = false;
+
+    /**
+     * How much of an attachment the signature covers: {@code Content} for its bytes alone, {@code Element}
+     * for its canonicalized MIME headers as well. A bare {@code sp:Attachments} means Element, and
+     * {@code sp13:ContentSignatureTransform} is what opts out of it, so this is the modifier CXF's
+     * {@code getSignedParts()} picks from the policy.
+     */
+    public String attachmentSignatureCoverage = "Content";
+
+    /** The same choice for encryption, which no policy validates but a default-configured sender emits. */
+    public String attachmentEncryptionCoverage = "Content";
     public boolean requireUsernameToken = false; // enforce/produce wsse:UsernameToken
     public boolean requireSaml = false;          // enforce/produce a saml:Assertion in the Security header
 
@@ -125,6 +150,12 @@ public final class ScenarioConfig {
         config.requireSignature = boolProp(props, "require.signature", config.requireSignature);
         config.requireTimestamp = boolProp(props, "require.timestamp", config.requireTimestamp);
         config.requireEncryption = boolProp(props, "require.encryption", config.requireEncryption);
+        config.signAttachments = boolProp(props, "attachments.sign", config.signAttachments);
+        config.encryptAttachments = boolProp(props, "attachments.encrypt", config.encryptAttachments);
+        config.attachmentSignatureCoverage =
+                props.getProperty("attachments.signCoverage", config.attachmentSignatureCoverage).trim();
+        config.attachmentEncryptionCoverage =
+                props.getProperty("attachments.encryptCoverage", config.attachmentEncryptionCoverage).trim();
         config.requireUsernameToken = boolProp(props, "require.usernameToken", config.requireUsernameToken);
         config.requireSaml = boolProp(props, "require.saml", config.requireSaml);
         config.timestampTimeToLiveSeconds =
@@ -172,6 +203,8 @@ public final class ScenarioConfig {
                 + "signature=" + requireSignature
                 + ", timestamp=" + requireTimestamp
                 + ", encryption=" + requireEncryption
+                + ", signAttachments=" + signAttachments
+                + ", encryptAttachments=" + encryptAttachments
                 + ", usernameToken=" + requireUsernameToken
                 + ", saml=" + requireSaml
                 + ", ttl=" + timestampTimeToLiveSeconds + "s"
