@@ -38,7 +38,10 @@ final class Verifier {
         RequestData data = new RequestData();
         data.setSigVerCrypto(crypto);
         data.setDecCrypto(crypto);
-        data.setCallbackHandler(new CallbackHandlerStub("changeit", config.usernamePassword));
+        // A symmetric binding names its key by the digest of the key's own cipher bytes, which WSS4J resolves
+        // through a callback and not from the xenc:EncryptedKey sitting next to it in the header.
+        data.setCallbackHandler(new SessionKeyCallbackHandler(
+                new CallbackHandlerStub("changeit", config.usernamePassword), data));
         data.setWssConfig(org.apache.wss4j.dom.engine.WSSConfig.getNewInstance());
         data.setDisableBSPEnforcement(config.disableBspEnforcement);
         // Freshness window for the wsu:Timestamp, matching the PHP profile's ttl/skew.

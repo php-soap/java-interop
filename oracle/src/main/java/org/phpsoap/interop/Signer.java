@@ -9,6 +9,9 @@ import org.apache.wss4j.dom.message.WSSecTimestamp;
 import org.apache.wss4j.dom.message.WSSecUsernameToken;
 import org.w3c.dom.Document;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Produces a WSS4J-signed SOAP message whose wire shape matches what the PHP
  * {@code Outbound\Signature} + {@code Outbound\Timestamp} + {@code Outbound\BinarySecurityToken}
@@ -66,7 +69,11 @@ final class Signer {
             timestamp.build();
         }
 
-        if (config.requireSignature) {
+        if (config.symmetricBinding) {
+            // One key, two blocks: signing and encryption are not independent here, so one collaborator emits
+            // both rather than this method growing an encryption branch of its own.
+            new SymmetricBinding(crypto, config).apply(document, header, signedParts(document));
+        } else if (config.requireSignature) {
             WSSecSignature signature = new WSSecSignature(header);
             signature.setUserInfo(keyAlias, keyPassword);
             signature.setKeyIdentifierType(keyIdentifierType(config.signatureKeyReference));
@@ -77,11 +84,7 @@ final class Signer {
             // will not complete the chain itself gets the intermediates handed to it.
             signature.setUseSingleCertificate(!config.signatureCertificatePath);
 
-            signature.getParts().add(
-                    new WSEncryptionPart(WSConstants.ELEM_BODY, soapNamespace(document), "Content"));
-            if (config.requireTimestamp) {
-                signature.getParts().add(new WSEncryptionPart("Timestamp", WSConstants.WSU_NS, "Element"));
-            }
+            signature.getParts().addAll(signedParts(document));
             if (config.signTokenThroughStrTransform) {
                 // "STRTransform" is reserved: WSSecSignature rewrites this part's id to strUri, the
                 // wsse:SecurityTokenReference it puts in ds:KeyInfo, and WSSecSignatureBase gives the
@@ -94,6 +97,17 @@ final class Signer {
         }
 
         return Xml.serialize(document);
+    }
+
+    /** What every signature here covers: the SOAP Body and, when there is one, the wsu:Timestamp. */
+    private List<WSEncryptionPart> signedParts(Document document) {
+        List<WSEncryptionPart> parts = new ArrayList<>();
+        parts.add(new WSEncryptionPart(WSConstants.ELEM_BODY, soapNamespace(document), "Content"));
+        if (config.requireTimestamp) {
+            parts.add(new WSEncryptionPart("Timestamp", WSConstants.WSU_NS, "Element"));
+        }
+
+        return parts;
     }
 
     /** Maps the PHP KeyRef enum names to the WSS4J key-identifier constants. */
@@ -139,6 +153,12 @@ final class Signer {
                 return WSConstants.RSA_SHA512;
             case "ECDSA_SHA256":
                 return ECDSA_SHA256;
+            case "HMAC_SHA1":
+                return WSConstants.HMAC_SHA1;
+            case "HMAC_SHA256":
+                return WSConstants.HMAC_SHA256;
+            case "HMAC_SHA512":
+                return WSConstants.HMAC_SHA512;
             default:
                 throw new IllegalArgumentException("Unknown signature.algorithm: " + name);
         }

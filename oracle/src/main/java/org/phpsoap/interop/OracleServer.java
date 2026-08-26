@@ -385,6 +385,12 @@ public final class OracleServer {
         if (q.containsKey("strTransform")) {
             config.signTokenThroughStrTransform = Boolean.parseBoolean(q.get("strTransform"));
         }
+        if (q.containsKey("symmetric")) {
+            config.symmetricBinding = Boolean.parseBoolean(q.get("symmetric"));
+        }
+        if (q.containsKey("derivedkeys")) {
+            config.requireDerivedKeys = Boolean.parseBoolean(q.get("derivedkeys"));
+        }
         if (q.containsKey("sigalias")) {
             config.signatureKeyAlias = q.get("sigalias");
         }

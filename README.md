@@ -68,8 +68,13 @@ AES-256-GCM + RSA-OAEP). Override per request via query string, e.g.
 `POST /sign?keyref=SubjectKeyIdentifier&sigalg=RSA_SHA512&c14n=INCLUSIVE`,
 `POST /encrypt?encdata=AES256_CBC&oaep=SHA256&enckeyref=IssuerSerial`.
 
+`symmetric=true` is the one option that changes what `/sign` produces rather than only how: it emits a
+WS-SecurityPolicy SymmetricBinding, so the response carries an HMAC signature and an encrypted Body keyed by
+one shared `xenc:EncryptedKey`, with the `xenc:ReferenceList` a sibling of that key. `sigalg` has to name an
+HMAC there, and `derivedkeys=true` puts a `wsc:DerivedKeyToken` per block in between.
+
 Recognised query params:
-- `/sign`: `keyref`, `sigalg` (`RSA_SHA256|RSA_SHA512|ECDSA_SHA256`), `sigalias` (`java-server`|`ec-client`), `c14n`, `disableBsp`, `ttl`.
+- `/sign`: `keyref`, `sigalg` (`RSA_SHA256|RSA_SHA512|ECDSA_SHA256|HMAC_SHA1|HMAC_SHA256|HMAC_SHA512`), `sigalias` (`java-server`|`ec-client`), `c14n`, `disableBsp`, `ttl`; `symmetric` + `derivedkeys` + `recipient` for the SymmetricBinding.
 - `/verify`: `sigalg`, `disableBsp`, `ttl`; `sig`/`ts`/`ut` (require-flags) + `user`/`pass`/`utdigest` for UsernameToken validation.
 - `/encrypt`: `encdata` (`AES256_GCM|AES256_CBC`), `oaep` (`SHA1|SHA256`), `enckeyref` (`SubjectKeyIdentifier|IssuerSerial`), `recipient`.
 - `/attach`: `op` (`emit|receive`), `type` (`swa|mtom`), `protocol` (`soap11|soap12`), `cid`.

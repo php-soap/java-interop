@@ -83,8 +83,31 @@ public final class ScenarioConfig {
      */
     public String signatureKeyReference = "BinarySecurityToken";
 
-    /** XML-DSig signature algorithm: RSA_SHA256 (default), RSA_SHA512 or ECDSA_SHA256. */
+    /**
+     * XML-DSig signature algorithm: RSA_SHA256 (default), RSA_SHA512, ECDSA_SHA256, or one of the
+     * HMAC_SHA1 / HMAC_SHA256 / HMAC_SHA512 keyed-MAC algorithms the symmetric binding uses. Mirrors the PHP
+     * {@code Algorithm\SignatureMethod} enum, which carries the same two families in one type so a consumer
+     * has to decide which kind of key it is holding rather than defaulting to the certificate route.
+     */
     public String signatureAlgorithm = "RSA_SHA256";
+
+    /**
+     * Emit a WS-SecurityPolicy SymmetricBinding: one session key, wrapped once in an xenc:EncryptedKey, keying
+     * an HMAC signature and the Body encryption both, with the xenc:ReferenceList a sibling of that key.
+     *
+     * <p>This one flag decides the whole shape of what the signer emits rather than modifying it, so it
+     * overrides {@link #requireSignature} and {@link #requireEncryption} instead of combining with them: the
+     * two blocks are two uses of one key here, and a binding carrying only one of them is not this binding.
+     * Those two flags keep their meaning on the verifying side, where they say what a message must carry.
+     */
+    public boolean symmetricBinding = false;
+
+    /**
+     * Derive a separate key per block from the one xenc:EncryptedKey, each announced by its own
+     * wsc:DerivedKeyToken, rather than using the session key directly. What {@code sp:RequireDerivedKeys}
+     * asks for. Only read when {@link #symmetricBinding} is on.
+     */
+    public boolean requireDerivedKeys = false;
 
     /**
      * When true the signer puts the whole certification path in the wsse:BinarySecurityToken as an
