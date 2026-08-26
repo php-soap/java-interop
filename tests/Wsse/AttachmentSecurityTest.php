@@ -495,8 +495,8 @@ final class AttachmentSecurityTest extends InteropTestCase
      */
     public static function canonicalizedMediaTypes(): iterable
     {
-        yield 'text' => ['text/plain', 'content line-ending canonicalization, which is not supported'];
         yield 'xml' => ['application/xml', 'XML canonicalization, which is not supported'];
+        yield 'an xml suffix' => ['application/soap+xml', 'XML canonicalization, which is not supported'];
     }
 
     public function test_wss4j_digests_a_text_attachment_over_normalized_line_endings(): void
@@ -540,11 +540,11 @@ final class AttachmentSecurityTest extends InteropTestCase
         return trim($digests->item(0)->textContent);
     }
 
-    public function test_php_verifies_a_text_attachment_whose_line_endings_are_already_normalized(): void
+    public function test_php_verifies_a_text_attachment_wss4j_signed_over_mixed_line_endings(): void
     {
-        // The control for the case above: identical in every way except that the two canonical forms
-        // coincide. It verifies, which isolates the line endings as the whole of the disagreement.
-        $payload = "line one\r\nline two\r\nline three";
+        // The pair of the measurement above. WSS4J digests the normalized form; PHP now normalizes before
+        // comparing, so a part whose two canonical forms differ is exactly the case that has to verify.
+        $payload = "line one\nline two\r\nline three\rline four";
 
         [$document, $storage] = $this->javaSecured($payload, signAttachments: true, mimeType: 'text/plain');
 
@@ -556,6 +556,25 @@ final class AttachmentSecurityTest extends InteropTestCase
         self::assertSame(
             hash('sha256', $payload),
             hash('sha256', $this->onlyAttachment($storage)->content->rewind()->getContents()),
+        );
+    }
+
+    public function test_wss4j_verifies_a_text_attachment_php_signed_over_mixed_line_endings(): void
+    {
+        // PHP composes the digest over the normalized form. WSS4J recomputes it its own way, so this is the
+        // assertion that the two normalizations agree byte for byte rather than merely both existing.
+        $payload = "line one\nline two\r\nline three\rline four";
+
+        $result = $this->javaCheck(
+            $this->phpSecure($payload, sign: true, mimeType: 'text/plain'),
+            signAttachments: true,
+        );
+
+        self::assertTrue($result['valid'], 'WSS4J rejected a PHP-signed text attachment: '.($result['error'] ?? ''));
+        self::assertContains(
+            hash('sha256', $payload),
+            $result['sha256'],
+            'the octets must still travel unmodified; only the digest over them is normalized',
         );
     }
 
