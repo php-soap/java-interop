@@ -96,6 +96,39 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         self::assertTrue($result['valid'], 'WSS4J refused the endorsed binding: '.$result['reason']);
     }
 
+    /**
+     * What a real sp:Basic128Rsa15 policy pins, which is the suite issue #9's service asks for: HMAC-SHA1 for
+     * the signature and AES-128-CBC for the data. Both are refused by the default CryptoPolicy and have to be
+     * named, so this is also the row proving the opt-in reaches a message a real peer reads.
+     */
+    public function test_wss4j_reads_a_php_binding_using_the_legacy_algorithm_suite(): void
+    {
+        $document = Document::fromXmlString(Oracle::sampleEnvelope());
+        $profile = new SecurityProfile(crypto: new CryptoPolicy(
+            acceptedSignatureMethods: [SignatureMethod::HMAC_SHA1],
+            acceptedDataEncryptionMethods: [DataEncryptionMethod::AES128_CBC],
+        ));
+        $context = new WsseContext($document, SoapVersion::Soap12, $profile, new ExchangeKeys());
+
+        $sessionKey = new Keys\WrappedSessionKey(
+            Certificate::fromFile(Oracle::certPath('java-server.crt')),
+            EncKeyRef::Thumbprint,
+            DataEncryptionMethod::AES128_CBC,
+        );
+
+        (new Outbound\Timestamp())($context);
+        (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
+            ->withSignatureMethod(SignatureMethod::HMAC_SHA1)
+            ->withParts([Part::body(), Part::timestamp()])($context);
+        (new Outbound\Encryption($sessionKey))
+            ->withDataEncryptionMethod(DataEncryptionMethod::AES128_CBC)
+            ->withParts([Part::body()])($context);
+
+        $result = $this->verify($document->toXmlString());
+
+        self::assertTrue($result['valid'], 'WSS4J refused the legacy suite: '.$result['reason']);
+    }
+
     // ----------------------------------------------------------------- WSS4J -> PHP
 
     /**
@@ -108,25 +141,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
     public function test_php_reads_a_wss4j_response_keyed_by_the_key_its_request_established(): void
     {
         $keys = new ExchangeKeys();
-        $document = Document::fromXmlString(Oracle::sampleEnvelope());
-        $request = $this->context($document, $keys);
-
-        // The request establishes the key, exactly as it would in a real exchange.
-        $sessionKey = new Keys\WrappedSessionKey(
-            Certificate::fromFile(Oracle::certPath('java-server.crt')),
-            EncKeyRef::Thumbprint,
-        );
-        (new Outbound\Timestamp())($request);
-        (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
-            ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
-            ->withParts([Part::body(), Part::timestamp()])($request);
-        (new Outbound\Encryption($sessionKey))->withParts([Part::body()])($request);
-
-        $answered = Oracle::post('/symmetric/respond?sigalg=HMAC_SHA256', $document->toXmlString());
-        self::assertSame(200, $answered['status'], 'oracle /symmetric/respond failed: '.$answered['body']);
-
-        $response = Document::fromXmlString($answered['body']);
-        self::assertStringNotContainsString(self::PLAINTEXT_MARKER, $answered['body'], 'the answer is not encrypted');
+        $response = $this->wss4jResponseTo($this->establishedRequest($keys));
 
         // The same exchange keys the request used, which is what the middleware hands both directions.
         $inbound = $this->context($response, $keys);
@@ -136,31 +151,69 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
     }
 
+    /**
+     * The same direction with sp:RequireDerivedKeys on, which is the shape this package's reader had never been
+     * fed by anything but its own writer. WSS4J's wsc:DerivedKeyToken differs from ours in two ways that matter
+     * to a reader: it declares no @Algorithm, relying on the specification's P_SHA1 default, and it carries no
+     * wsc:Label, relying on the default label. Requiring either would leave every token it emits unreadable.
+     */
+    public function test_php_reads_a_wss4j_response_that_derives_a_key_per_block(): void
+    {
+        $keys = new ExchangeKeys();
+        $response = $this->wss4jResponseTo($this->establishedRequest($keys), derivedKeys: true);
+
+        $inbound = $this->context($response, $keys);
+        (new Inbound\Decrypt())($inbound);
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($inbound);
+
+        self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
+        self::assertStringContainsString('DerivedKeyToken', $response->toXmlString());
+    }
+
     public function test_php_refuses_that_same_response_against_a_different_exchange(): void
     {
         // The scoping rule, from the outside: a response opens against the exchange that established its key
         // and against no other. Without that a captured answer would replay into any later call.
-        $keys = new ExchangeKeys();
+        $response = $this->wss4jResponseTo($this->establishedRequest(new ExchangeKeys()));
+
+        $this->expectException(SecurityFault::class);
+        (new Inbound\Decrypt())($this->context($response, new ExchangeKeys()));
+    }
+
+    /** A request that establishes a session key in the given exchange, as a real one would. */
+    private function establishedRequest(ExchangeKeys $keys): string
+    {
         $document = Document::fromXmlString(Oracle::sampleEnvelope());
-        $request = $this->context($document, $keys);
+        $context = $this->context($document, $keys);
 
         $sessionKey = new Keys\WrappedSessionKey(
             Certificate::fromFile(Oracle::certPath('java-server.crt')),
             EncKeyRef::Thumbprint,
         );
-        (new Outbound\Timestamp())($request);
+        (new Outbound\Timestamp())($context);
         (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
             ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
-            ->withParts([Part::body(), Part::timestamp()])($request);
-        (new Outbound\Encryption($sessionKey))->withParts([Part::body()])($request);
+            ->withParts([Part::body(), Part::timestamp()])($context);
+        (new Outbound\Encryption($sessionKey))->withParts([Part::body()])($context);
 
-        $answered = Oracle::post('/symmetric/respond?sigalg=HMAC_SHA256', $document->toXmlString());
+        return $document->toXmlString();
+    }
+
+    /** The oracle's answer, keyed by the key that request conveyed. */
+    private function wss4jResponseTo(string $request, bool $derivedKeys = false): Document
+    {
+        $answered = Oracle::post(
+            sprintf('/symmetric/respond?sigalg=HMAC_SHA256&derivedkeys=%s', $derivedKeys ? 'true' : 'false'),
+            $request,
+        );
         self::assertSame(200, $answered['status'], 'oracle /symmetric/respond failed: '.$answered['body']);
+        self::assertStringNotContainsString(
+            self::PLAINTEXT_MARKER,
+            $answered['body'],
+            'the answer is not encrypted',
+        );
 
-        $response = Document::fromXmlString($answered['body']);
-
-        $this->expectException(SecurityFault::class);
-        (new Inbound\Decrypt())($this->context($response, new ExchangeKeys()));
+        return Document::fromXmlString($answered['body']);
     }
 
     /**

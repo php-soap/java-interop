@@ -87,6 +87,12 @@ final class SymmetricBinding {
 
         org.apache.xml.security.Init.init();
 
+        if (config.requireDerivedKeys) {
+            deriveFromEstablishedKey(document, header, signedParts, sessionKey, encryptedKeySha1);
+
+            return;
+        }
+
         WSSecSignature signature = new WSSecSignature(header);
         signature.setKeyIdentifierType(WSConstants.ENCRYPTED_KEY_SHA1_IDENTIFIER);
         signature.setEncrKeySha1value(encryptedKeySha1);
@@ -104,6 +110,34 @@ final class SymmetricBinding {
         encrypt.setSymmetricEncAlgorithm(Encryptor.dataAlgorithm(config.dataEncryptionAlgorithm));
         encrypt.getParts().add(bodyContent(document));
         encrypt.build(crypto, sessionKey);
+    }
+
+    /**
+     * Derive one key per block from a key the peer already holds, each announced by its own wsc:DerivedKeyToken
+     * that names the shared key by its EncryptedKeySHA1 rather than by an element this message does not carry.
+     */
+    private void deriveFromEstablishedKey(
+            Document document,
+            WSSecHeader header,
+            List<WSEncryptionPart> signedParts,
+            SecretKey sessionKey,
+            String encryptedKeySha1) throws Exception {
+
+        WSSecDKSign signature = new WSSecDKSign(header);
+        signature.setTokenIdentifier(encryptedKeySha1);
+        signature.setCustomValueType(WSConstants.SOAPMESSAGE_NS11 + "#EncryptedKeySHA1");
+        signature.setSignatureAlgorithm(macAlgorithm());
+        signature.setDigestAlgorithm(WSConstants.SHA256);
+        signature.setSigCanonicalization(Signer.canonicalizationUri(config.canonicalization));
+        signature.getParts().addAll(signedParts);
+        signature.build(sessionKey.getEncoded());
+
+        WSSecDKEncrypt encrypt = new WSSecDKEncrypt(header);
+        encrypt.setTokenIdentifier(encryptedKeySha1);
+        encrypt.setCustomValueType(WSConstants.SOAPMESSAGE_NS11 + "#EncryptedKeySHA1");
+        encrypt.setSymmetricEncAlgorithm(Encryptor.dataAlgorithm(config.dataEncryptionAlgorithm));
+        encrypt.getParts().add(bodyContent(document));
+        encrypt.build(sessionKey.getEncoded());
     }
 
     /** The SOAP Body content, as the part list every symmetric flow here covers. */
