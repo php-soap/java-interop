@@ -580,6 +580,28 @@ final class AttachmentSecurityTest extends InteropTestCase
         self::assertTrue($result['valid'], 'WSS4J rejected a PHP-signed XML attachment covered completely: '.($result['error'] ?? ''));
     }
 
+    public function test_php_verifies_a_text_attachment_wss4j_covered_completely(): void
+    {
+        // The last cell of the signing matrix: direction times coverage times media type. Every other cell
+        // was filled before this one, which is how the ordering bug in a complete coverage survived: the
+        // complete cases were all binary, where the transform is the identity and the order cannot show.
+        $payload = "line one\nline two\r\nline three\rline four";
+
+        [$document, $storage] = $this->javaSecured(
+            $payload,
+            signAttachments: true,
+            mimeType: 'text/plain',
+            signCoverage: 'Element',
+        );
+
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Complete))(
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+            );
+
+        self::assertSame($payload, $this->onlyAttachment($storage)->content->rewind()->getContents());
+    }
+
     public function test_wss4j_verifies_a_text_attachment_php_covered_completely(): void
     {
         // The same ordering question for the other transform, where getting it wrong happens to produce the
