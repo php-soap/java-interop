@@ -51,6 +51,14 @@ public final class OracleServer {
     }
 
     public static void main(String[] args) throws Exception {
+        // Santuario and WSS4J register their algorithms and transform providers when initialised, the
+        // STR-Transform among them. Doing it here rather than lazily inside one op removes an ordering
+        // dependency: before this, a signature covering its token through STR-Transform succeeded only when
+        // some earlier request had happened to initialise WSS4J, and failed with "algorithm and DOM mechanism
+        // not available" when it was the first request the oracle served.
+        org.apache.xml.security.Init.init();
+        org.apache.wss4j.dom.engine.WSSConfig.init();
+
         String certDir = System.getenv().getOrDefault("CERT_DIR", "/certs");
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
 
@@ -261,6 +269,9 @@ public final class OracleServer {
         }
         if (q.containsKey("certpath")) {
             config.signatureCertificatePath = Boolean.parseBoolean(q.get("certpath"));
+        }
+        if (q.containsKey("strTransform")) {
+            config.signTokenThroughStrTransform = Boolean.parseBoolean(q.get("strTransform"));
         }
         if (q.containsKey("sigalias")) {
             config.signatureKeyAlias = q.get("sigalias");

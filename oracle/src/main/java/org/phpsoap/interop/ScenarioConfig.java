@@ -59,6 +59,17 @@ public final class ScenarioConfig {
     public boolean signatureCertificatePath = false;
 
     /**
+     * Cover the signing token through the WS-Security STR-Transform instead of leaving it uncovered: a
+     * ds:Reference at the wsse:SecurityTokenReference in ds:KeyInfo, carrying
+     * wsse:TransformationParameters, whose digest is taken over the wsse:BinarySecurityToken that reference
+     * names. WSS4J emits this for a signature part named "STRTransform", the reserved name WSSecSignature
+     * rewrites to strUri. Mirrors the PHP Inbound\\VerifySignature support for the same transform, which a
+     * PHP round trip cannot test: our own reader would only agree with our own fixtures about a shape PHP
+     * never emits.
+     */
+    public boolean signTokenThroughStrTransform = false;
+
+    /**
      * Keystore alias the signer uses. Defaults to the RSA java-server key; the ECDSA-SHA256 rows select the
      * EC leaf (ec-client) so the signature algorithm and key type agree.
      */
@@ -124,6 +135,8 @@ public final class ScenarioConfig {
                 props.getProperty("signature.keyReference", config.signatureKeyReference).trim();
         config.signatureAlgorithm =
                 props.getProperty("signature.algorithm", config.signatureAlgorithm).trim();
+        config.signTokenThroughStrTransform =
+                boolProp(props, "signature.strTransform", config.signTokenThroughStrTransform);
         config.signatureCertificatePath =
                 boolProp(props, "signature.certificatePath", config.signatureCertificatePath);
         config.canonicalization =
