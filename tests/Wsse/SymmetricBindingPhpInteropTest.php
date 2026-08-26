@@ -21,6 +21,7 @@ use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
 use Soap\Psr18WsseMiddleware\WSSecurity\SoapVersion;
 use Soap\Psr18WsseMiddleware\WSSecurity\WsseContext;
+use Soap\Psr18WsseMiddleware\WSSecurity\Xml\WsSecureConversationVersion;
 use Soap\Psr18WsseMiddleware\XmlSecurity\CryptoPolicy;
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
@@ -129,6 +130,49 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         self::assertTrue($result['valid'], 'WSS4J refused the legacy suite: '.$result['reason']);
     }
 
+    /**
+     * The older WS-SecureConversation dialect, emitted by PHP and read by WSS4J.
+     *
+     * A dialect is a namespace and an algorithm URI, and until this row each side had only ever been shown its
+     * own. That is exactly the blind spot that hid two reader defects one commit ago, so the 2005/02 draft gets
+     * the same both-directions treatment the 200512 revision has: this row, and its twin below.
+     */
+    public function test_wss4j_reads_a_php_derived_key_binding_in_the_2005_02_dialect(): void
+    {
+        $document = Document::fromXmlString(Oracle::sampleEnvelope());
+        $context = new WsseContext(
+            $document,
+            SoapVersion::Soap12,
+            new SecurityProfile(
+                crypto: new CryptoPolicy(acceptedSignatureMethods: [SignatureMethod::HMAC_SHA256]),
+                wsSecureConversation: WsSecureConversationVersion::V2005_02,
+            ),
+            new ExchangeKeys(),
+        );
+
+        $shared = new Keys\WrappedSessionKey(
+            Certificate::fromFile(Oracle::certPath('java-server.crt')),
+            EncKeyRef::Thumbprint,
+            DataEncryptionMethod::AES128_GCM,
+        );
+
+        (new Outbound\Timestamp())($context);
+        (new Outbound\Signature(new Outbound\SymmetricSigningKey(new Keys\DerivedSessionKey($shared))))
+            ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
+            ->withParts([Part::body(), Part::timestamp()])($context);
+        (new Outbound\Encryption(new Keys\DerivedSessionKey($shared)))
+            ->withDataEncryptionMethod(DataEncryptionMethod::AES128_GCM)
+            ->withParts([Part::body()])($context);
+
+        $xml = $document->toXmlString();
+        self::assertStringContainsString(WsSecureConversationVersion::V2005_02->value, $xml);
+        self::assertStringNotContainsString(WsSecureConversationVersion::V2005_12->value, $xml);
+
+        $result = $this->verify($xml);
+
+        self::assertTrue($result['valid'], 'WSS4J refused the 2005/02 dialect: '.$result['reason']);
+    }
+
     // ----------------------------------------------------------------- WSS4J -> PHP
 
     /**
@@ -170,6 +214,31 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         self::assertStringContainsString('DerivedKeyToken', $response->toXmlString());
     }
 
+    /**
+     * The same dialect the other way: WSS4J emits the 2005/02 draft and this package reads it. The profile says
+     * 200512 throughout, which is the point: what is emitted is the profile's business and what is accepted is
+     * not, so a peer speaking the older dialect is answered without configuring anything.
+     */
+    public function test_php_reads_a_wss4j_response_in_the_2005_02_dialect(): void
+    {
+        $keys = new ExchangeKeys();
+        $response = $this->wss4jResponseTo(
+            $this->establishedRequest($keys),
+            derivedKeys: true,
+            wscVersion: '2005/02',
+        );
+
+        // The whole answer is in the older dialect, so this cannot pass on a message that merely mentions it.
+        self::assertStringContainsString(WsSecureConversationVersion::V2005_02->value, $response->toXmlString());
+        self::assertStringNotContainsString(WsSecureConversationVersion::V2005_12->value, $response->toXmlString());
+
+        $inbound = $this->context($response, $keys);
+        (new Inbound\Decrypt())($inbound);
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($inbound);
+
+        self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
+    }
+
     public function test_php_refuses_that_same_response_against_a_different_exchange(): void
     {
         // The scoping rule, from the outside: a response opens against the exchange that established its key
@@ -200,10 +269,17 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
     }
 
     /** The oracle's answer, keyed by the key that request conveyed. */
-    private function wss4jResponseTo(string $request, bool $derivedKeys = false): Document
-    {
+    private function wss4jResponseTo(
+        string $request,
+        bool $derivedKeys = false,
+        string $wscVersion = '200512',
+    ): Document {
         $answered = Oracle::post(
-            sprintf('/symmetric/respond?sigalg=HMAC_SHA256&derivedkeys=%s', $derivedKeys ? 'true' : 'false'),
+            sprintf(
+                '/symmetric/respond?sigalg=HMAC_SHA256&derivedkeys=%s&wscversion=%s',
+                $derivedKeys ? 'true' : 'false',
+                urlencode($wscVersion),
+            ),
             $request,
         );
         self::assertSame(200, $answered['status'], 'oracle /symmetric/respond failed: '.$answered['body']);

@@ -406,6 +406,12 @@ public final class OracleServer {
         if (q.containsKey("derivedkeys")) {
             config.requireDerivedKeys = Boolean.parseBoolean(q.get("derivedkeys"));
         }
+        if (q.containsKey("wscversion")) {
+            // "2005/02" or "200512", named the way the namespaces are rather than by WSS4J's internal ordinals.
+            config.wsSecureConversationVersion = "2005/02".equals(q.get("wscversion"))
+                    ? org.apache.wss4j.common.derivedKey.ConversationConstants.VERSION_05_02
+                    : org.apache.wss4j.common.derivedKey.ConversationConstants.VERSION_05_12;
+        }
         if (q.containsKey("sigalias")) {
             config.signatureKeyAlias = q.get("sigalias");
         }

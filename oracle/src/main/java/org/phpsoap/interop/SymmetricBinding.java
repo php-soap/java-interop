@@ -124,6 +124,7 @@ final class SymmetricBinding {
             String encryptedKeySha1) throws Exception {
 
         WSSecDKSign signature = new WSSecDKSign(header);
+        signature.setWscVersion(config.wsSecureConversationVersion);
         signature.setTokenIdentifier(encryptedKeySha1);
         signature.setCustomValueType(WSConstants.SOAPMESSAGE_NS11 + "#EncryptedKeySHA1");
         signature.setSignatureAlgorithm(macAlgorithm());
@@ -133,6 +134,7 @@ final class SymmetricBinding {
         signature.build(sessionKey.getEncoded());
 
         WSSecDKEncrypt encrypt = new WSSecDKEncrypt(header);
+        encrypt.setWscVersion(config.wsSecureConversationVersion);
         encrypt.setTokenIdentifier(encryptedKeySha1);
         encrypt.setCustomValueType(WSConstants.SOAPMESSAGE_NS11 + "#EncryptedKeySHA1");
         encrypt.setSymmetricEncAlgorithm(Encryptor.dataAlgorithm(config.dataEncryptionAlgorithm));
@@ -185,6 +187,7 @@ final class SymmetricBinding {
             SecretKey sessionKey) throws Exception {
 
         WSSecDKSign signature = new WSSecDKSign(header);
+        signature.setWscVersion(config.wsSecureConversationVersion);
         signature.setTokenIdentifier(encryptedKey.getId());
         signature.setCustomValueType(WSConstants.WSS_ENC_KEY_VALUE_TYPE);
         signature.setSignatureAlgorithm(macAlgorithm());
@@ -194,6 +197,7 @@ final class SymmetricBinding {
         signature.build(sessionKey.getEncoded());
 
         WSSecDKEncrypt encrypt = new WSSecDKEncrypt(header);
+        encrypt.setWscVersion(config.wsSecureConversationVersion);
         encrypt.setTokenIdentifier(encryptedKey.getId());
         encrypt.setCustomValueType(WSConstants.WSS_ENC_KEY_VALUE_TYPE);
         encrypt.setSymmetricEncAlgorithm(Encryptor.dataAlgorithm(config.dataEncryptionAlgorithm));

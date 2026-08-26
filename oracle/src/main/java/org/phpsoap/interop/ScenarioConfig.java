@@ -1,5 +1,7 @@
 package org.phpsoap.interop;
 
+import org.apache.wss4j.common.derivedKey.ConversationConstants;
+
 import java.util.Properties;
 
 /**
@@ -108,6 +110,17 @@ public final class ScenarioConfig {
      * asks for. Only read when {@link #symmetricBinding} is on.
      */
     public boolean requireDerivedKeys = false;
+
+    /**
+     * Which WS-SecureConversation dialect an emitted wsc:DerivedKeyToken is written in: 1 for the 2005/02 draft
+     * that shipped in early stacks, 2 for the 200512 OASIS revision a modern peer expects. Only read when
+     * {@link #requireDerivedKeys} is on.
+     *
+     * <p>Both exist so each side can be shown reading the other's, rather than each reading only its own. A
+     * dialect is a namespace and an algorithm URI, so an emitter that has never been fed the other one has
+     * tested its own convention rather than the format.
+     */
+    public int wsSecureConversationVersion = ConversationConstants.DEFAULT_VERSION;
 
     /**
      * When true the signer puts the whole certification path in the wsse:BinarySecurityToken as an
