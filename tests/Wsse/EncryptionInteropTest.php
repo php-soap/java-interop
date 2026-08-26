@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use SoapInterop\Tests\Support\Wsse;
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\Algorithm\DataEncryptionMethod;
 use Soap\Psr18WsseMiddleware\XmlSecurity\CryptoPolicy;
 use Soap\Psr18WsseMiddleware\Algorithm\KeyEncryptionMethod;
@@ -63,7 +64,7 @@ final class EncryptionInteropTest extends InteropTestCase
 
         $document = Document::fromXmlString($encrypted);
         $profile = new SecurityProfile(crypto: new CryptoPolicy(acceptedDataEncryptionMethods: $acceptedCiphers));
-        $context = new WsseContext($document, SoapVersion::Soap12, $profile);
+        $context = new WsseContext($document, SoapVersion::Soap12, $profile, new ExchangeKeys());
 
         try {
             (new Inbound\Decrypt(Key::fromFile(Oracle::certPath('php-client.key'))))($context);
@@ -82,7 +83,7 @@ final class EncryptionInteropTest extends InteropTestCase
         $encrypted = Oracle::post('/encrypt?encdata=AES256_CBC&oaep=SHA1', Oracle::sampleEnvelope())['body'];
 
         $document = Document::fromXmlString($encrypted);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
 
         $this->expectException(SecurityFault::class);
         (new Inbound\Decrypt(Key::fromFile(Oracle::certPath('php-client.key'))))($context);
@@ -99,7 +100,7 @@ final class EncryptionInteropTest extends InteropTestCase
         self::assertStringContainsString('xmlenc#sha256', $encrypted);
 
         $document = Document::fromXmlString($encrypted);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
 
         try {
             (new Inbound\Decrypt(Key::fromFile(Oracle::certPath('php-client.key'))))($context);
@@ -116,7 +117,7 @@ final class EncryptionInteropTest extends InteropTestCase
         $encrypted = Oracle::post('/encrypt?enckeyref=IssuerSerial', Oracle::sampleEnvelope())['body'];
 
         $document = Document::fromXmlString($encrypted);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
         (new Inbound\Decrypt(Key::fromFile(Oracle::certPath('php-client.key'))))($context);
 
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $document->toXmlString());
@@ -206,7 +207,7 @@ final class EncryptionInteropTest extends InteropTestCase
         $node->textContent = base64_encode(random_bytes(48));
 
         $document = Document::fromXmlString((string) $dom->saveXML());
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
 
         try {
             (new Inbound\Decrypt(Key::fromFile(Oracle::certPath('php-client.key'))))($context);

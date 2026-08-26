@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace SoapInterop\Tests\Wsse;
 
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
+use Soap\Psr18WsseMiddleware\WSSecurity\Signing;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
 use Soap\Psr18WsseMiddleware\WSSecurity\SoapVersion;
@@ -101,7 +103,7 @@ final class SamlHolderOfKeyInteropTest extends InteropTestCase
     private function signWithAssertion(string $assertionXml): string
     {
         $document = Document::fromXmlString(Oracle::sampleEnvelope());
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
         $clientCertificate = ClientCertificate::fromFile(Oracle::certPath('php-client.pem'));
 
         (new Outbound\Timestamp(300))($context);
@@ -110,7 +112,7 @@ final class SamlHolderOfKeyInteropTest extends InteropTestCase
         // child of the Security header, which here includes the assertion. Signing the assertion mints a
         // wsu:Id on it, and that attribute is inside what the issuer's own enveloped signature covers, so
         // stamping it invalidates the very assertion the reference depends on.
-        (new Outbound\Signature(new Outbound\CertificateSigningKey(
+        (new Outbound\Signature(new Signing\Asymmetric(
             $clientCertificate,
             Outbound\KeyReference\KeyRef::SamlAssertion,
         )))

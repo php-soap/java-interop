@@ -10,6 +10,7 @@ use Psl\DateTime\Timezone;
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use SoapInterop\Tests\Support\Wsse;
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\Algorithm\SignatureMethod;
 use Soap\Psr18WsseMiddleware\Clock\Clock;
 use Soap\Psr18WsseMiddleware\WSSecurity\Exception\SecurityFault;
@@ -140,7 +141,7 @@ final class SignatureInteropTest extends InteropTestCase
         $javaSigned = Oracle::post('/sign', Oracle::sampleEnvelope())['body'];
 
         $document = Document::fromXmlString($javaSigned);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
         $trust = TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('ca.crt')));
 
         (new Inbound\VerifySignature($trust))($context);
@@ -293,7 +294,7 @@ final class SignatureInteropTest extends InteropTestCase
         $siblingSigned = Oracle::post('/sign?sigalg=ECDSA_SHA256&sigalias=ec-client', Oracle::sampleEnvelope())['body'];
 
         $document = Document::fromXmlString($siblingSigned);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
         $block = (new Inbound\VerifySignature(
             TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('ca.crt'))),
             signed: [Part::body(), Part::timestamp()],
@@ -334,7 +335,7 @@ final class SignatureInteropTest extends InteropTestCase
         $signed = Wsse::sign(timestampTtl: 1);
 
         $document = Document::fromXmlString($signed);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
         $action = (new Inbound\ValidateTimestamp())->withClock(self::fixedClock('+1 hour'));
 
         $this->expectRejection(static fn () => $action($context), 'an expired timestamp must be rejected');
@@ -345,7 +346,7 @@ final class SignatureInteropTest extends InteropTestCase
         $javaSigned = Oracle::post('/sign', Oracle::sampleEnvelope())['body'];
 
         $document = Document::fromXmlString($javaSigned);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
         // A clock far in the future makes any freshly-minted stamp stale.
         $action = (new Inbound\ValidateTimestamp())->withClock(self::fixedClock('2099-01-01T00:00:00Z'));
 
@@ -355,7 +356,7 @@ final class SignatureInteropTest extends InteropTestCase
     public function test_future_dated_timestamp_is_rejected_by_php(): void
     {
         $document = Document::fromXmlString(self::timestampEnvelope('2999-01-01T00:00:00Z', '2999-01-01T00:05:00Z'));
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
 
         $this->expectRejection(
             static fn () => (new Inbound\ValidateTimestamp())($context),
@@ -372,7 +373,7 @@ final class SignatureInteropTest extends InteropTestCase
         );
 
         $document = Document::fromXmlString($signed);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
         $trust = TrustStore::fromCertificates(
             Certificate::fromFile(Oracle::certPath('php-client.pem')),
             Certificate::fromFile(Oracle::certPath('ca.crt')),
@@ -393,7 +394,7 @@ final class SignatureInteropTest extends InteropTestCase
         );
 
         $document = Document::fromXmlString($signed);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
         $trust = TrustStore::fromCertificates(
             Certificate::fromFile(Oracle::certPath('php-client.pem')),
             Certificate::fromFile(Oracle::certPath('ca.crt')),
@@ -465,7 +466,7 @@ final class SignatureInteropTest extends InteropTestCase
     private function phpVerify(string $xml, array $signed, ?TrustStore $trust = null): void
     {
         $document = Document::fromXmlString($xml);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
         $trust ??= TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('ca.crt')));
 
         // Throws SecurityFault if not accepted; reaching the assertion is the pass.
@@ -477,7 +478,7 @@ final class SignatureInteropTest extends InteropTestCase
     private static function assertPhpRejects(string $xml, array $signed, ?TrustStore $trust = null): void
     {
         $document = Document::fromXmlString($xml);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
         $trust ??= TrustStore::fromCertificates(
             Certificate::fromFile(Oracle::certPath('php-client.pem')),
             Certificate::fromFile(Oracle::certPath('ca.crt')),

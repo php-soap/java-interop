@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace SoapInterop\Tests\Support;
 
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\Algorithm\KeyTransportAlgorithm;
 use Soap\Psr18WsseMiddleware\Algorithm\SignatureCanonicalization;
 use Soap\Psr18WsseMiddleware\Algorithm\SignatureMethod;
@@ -12,6 +13,7 @@ use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
 use Soap\Psr18WsseMiddleware\KeyStore\Pkcs12Bundle;
 use Soap\Psr18WsseMiddleware\WSSecurity\Keys;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
+use Soap\Psr18WsseMiddleware\WSSecurity\Signing;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
 use Soap\Psr18WsseMiddleware\WSSecurity\SoapVersion;
@@ -46,7 +48,7 @@ final class Wsse
     ): string {
         $soapVersion ??= SoapVersion::Soap12;
         $document = Document::fromXmlString($inputXml ?? Oracle::sampleEnvelope());
-        $context = new WsseContext($document, $soapVersion, new SecurityProfile());
+        $context = new WsseContext($document, $soapVersion, new SecurityProfile(), new ExchangeKeys());
         // A certificate path comes from the PKCS#12 bundle, which is the only shipped material that carries the
         // CA alongside the leaf; the PEM signing identity has no chain to offer.
         $bundle = $certificatePath ? Pkcs12Bundle::fromFile(Oracle::certPath('php-client.p12'), 'changeit') : null;
@@ -56,7 +58,7 @@ final class Wsse
 
         (new Outbound\Timestamp($timestampTtl))($context);
 
-        $signature = new Outbound\Signature(new Outbound\CertificateSigningKey(
+        $signature = new Outbound\Signature(new Signing\Asymmetric(
             $clientCertificate,
             $keyRef,
             $bundle?->chain,
@@ -87,11 +89,11 @@ final class Wsse
         ?string $inputXml = null,
     ): string {
         $document = Document::fromXmlString($inputXml ?? Oracle::sampleEnvelope());
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
 
         // The recipient reference and the key transport describe how the session key reaches its recipient, so
         // they live on the key source rather than on the block.
-        $encryption = new Outbound\Encryption(new Keys\WrappedSessionKey(
+        $encryption = new Outbound\Encryption(new Keys\GeneratedSessionKey(
             Certificate::fromFile($recipientCertFile),
             $encKeyRef,
             keyTransportAlgorithm: $keyTransport,

@@ -13,6 +13,7 @@ use Soap\Psr18AttachmentsMiddleware\Multipart\AttachmentType;
 use Soap\Psr18AttachmentsMiddleware\Multipart\RequestBuilder;
 use Soap\Psr18AttachmentsMiddleware\Multipart\ResponseBuilder;
 use Soap\Psr18AttachmentsMiddleware\Storage\AttachmentStorage;
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\KeyStore\Key;
 use Soap\Psr18WsseMiddleware\WSSecurity\Attachment\AttachmentParts;
@@ -68,7 +69,7 @@ final class OptimizedCipherBytesInteropTest extends InteropTestCase
 
         (new Inbound\ResolveOptimizedBytes(
             AttachmentParts::response($storage, ExternalPartCoverage::Content),
-        ))(new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()));
+        ))(new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()));
 
         self::assertStringNotContainsString('xop:Include', $document->toXmlString());
     }
@@ -80,7 +81,7 @@ final class OptimizedCipherBytesInteropTest extends InteropTestCase
 
         $this->expectException(SecurityFault::class);
         (new Inbound\Decrypt($this->privateKey()))(
-            new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+            new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
         );
     }
 
@@ -157,7 +158,7 @@ final class OptimizedCipherBytesInteropTest extends InteropTestCase
 
     private function resolveAndDecrypt(Document $document, AttachmentStorage $storage): void
     {
-        $context = new WsseContext($document, SoapVersion::Soap11, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys());
 
         (new Inbound\ResolveOptimizedBytes(
             AttachmentParts::response($storage, ExternalPartCoverage::Content),
@@ -178,11 +179,11 @@ final class OptimizedCipherBytesInteropTest extends InteropTestCase
         // key in the header is written by the source, the encrypted content by the block.
         $carriers = AttachmentParts::request($storage, ExternalPartCoverage::Content);
 
-        (new Outbound\Encryption(new Keys\WrappedSessionKey(
+        (new Outbound\Encryption(new Keys\GeneratedSessionKey(
             $this->recipientCertificate(),
             optimizedCipherBytes: $carriers,
         )))->withOptimizedCipherBytes($carriers)(
-            new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+            new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
         );
 
         return $this->pack($document->toXmlString(), $storage);

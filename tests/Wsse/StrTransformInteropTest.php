@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace SoapInterop\Tests\Wsse;
 
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\Algorithm\SignatureCanonicalization;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\KeyStore\TrustStore;
@@ -137,7 +138,9 @@ final class StrTransformInteropTest extends InteropTestCase
         $document = Document::fromXmlString($javaSigned);
         $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(
             crypto: new CryptoPolicy(acceptedCanonicalizations: [SignatureCanonicalization::C14N]),
-        ));
+        ),
+            new ExchangeKeys()
+        );
 
         try {
             (new Inbound\VerifySignature($this->trust(), signed: [Part::body()]))($context);
@@ -175,7 +178,7 @@ final class StrTransformInteropTest extends InteropTestCase
     private function phpVerify(string $xml, array $signed): void
     {
         $document = Document::fromXmlString($xml);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
 
         // Throws SecurityFault if not accepted; reaching the assertion is the pass.
         (new Inbound\VerifySignature($this->trust(), signed: $signed))($context);
@@ -186,7 +189,7 @@ final class StrTransformInteropTest extends InteropTestCase
     private function assertPhpRejects(string $xml, array $signed): void
     {
         $document = Document::fromXmlString($xml);
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
 
         try {
             (new Inbound\VerifySignature($this->trust(), signed: $signed))($context);

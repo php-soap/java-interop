@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace SoapInterop\Tests\Wsse;
 
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\KeyStore\Key;
 use Soap\Psr18WsseMiddleware\KeyStore\TrustStore;
@@ -89,7 +90,7 @@ final class ProtectionOrderInteropTest extends InteropTestCase
 
     private function context(Document $document): WsseContext
     {
-        return new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        return new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
     }
 
     private function trustStore(): TrustStore

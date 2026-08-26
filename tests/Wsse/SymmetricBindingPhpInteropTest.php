@@ -16,6 +16,7 @@ use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\Keys;
 use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
+use Soap\Psr18WsseMiddleware\WSSecurity\Signing;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound\KeyReference\EncKeyRef;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound\KeyReference\KeyRef;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
@@ -118,14 +119,14 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         ));
         $context = new WsseContext($document, SoapVersion::Soap12, $profile, new ExchangeKeys());
 
-        $sessionKey = new Keys\WrappedSessionKey(
+        $sessionKey = new Keys\GeneratedSessionKey(
             Certificate::fromFile(Oracle::certPath('java-server.crt')),
             EncKeyRef::Thumbprint,
             DataEncryptionMethod::AES128_CBC,
         );
 
         (new Outbound\Timestamp())($context);
-        (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
+        (new Outbound\Signature(new Signing\Symmetric($sessionKey)))
             ->withSignatureMethod(SignatureMethod::HMAC_SHA1)
             ->withParts([Part::body(), Part::timestamp()])($context);
         (new Outbound\Encryption($sessionKey))
@@ -157,14 +158,14 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
             new ExchangeKeys(),
         );
 
-        $shared = new Keys\WrappedSessionKey(
+        $shared = new Keys\GeneratedSessionKey(
             Certificate::fromFile(Oracle::certPath('java-server.crt')),
             EncKeyRef::Thumbprint,
             DataEncryptionMethod::AES128_GCM,
         );
 
         (new Outbound\Timestamp())($context);
-        (new Outbound\Signature(new Outbound\SymmetricSigningKey(new Keys\DerivedSessionKey($shared))))
+        (new Outbound\Signature(new Signing\Symmetric(new Keys\DerivedSessionKey($shared))))
             ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
             ->withParts([Part::body(), Part::timestamp()])($context);
         (new Outbound\Encryption(new Keys\DerivedSessionKey($shared)))
@@ -196,7 +197,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
 
         // The same exchange keys the request used, which is what the middleware hands both directions.
         $inbound = $this->context($response, $keys);
-        (new Inbound\Decrypt())($inbound);
+        (Inbound\Decrypt::fromEstablishedKeys())($inbound);
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($inbound);
 
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
@@ -214,7 +215,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         $response = $this->wss4jResponseTo($this->establishedRequest($keys), derivedKeys: true);
 
         $inbound = $this->context($response, $keys);
-        (new Inbound\Decrypt())($inbound);
+        (Inbound\Decrypt::fromEstablishedKeys())($inbound);
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($inbound);
 
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
@@ -240,7 +241,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         self::assertStringNotContainsString(WsSecureConversationVersion::V2005_12->value, $response->toXmlString());
 
         $inbound = $this->context($response, $keys);
-        (new Inbound\Decrypt())($inbound);
+        (Inbound\Decrypt::fromEstablishedKeys())($inbound);
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($inbound);
 
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
@@ -253,7 +254,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         $response = $this->wss4jResponseTo($this->establishedRequest(new ExchangeKeys()));
 
         $this->expectException(SecurityFault::class);
-        (new Inbound\Decrypt())($this->context($response, new ExchangeKeys()));
+        (Inbound\Decrypt::fromEstablishedKeys())($this->context($response, new ExchangeKeys()));
     }
 
     /** A request that establishes a session key in the given exchange, as a real one would. */
@@ -262,12 +263,12 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         $document = Document::fromXmlString(Oracle::sampleEnvelope());
         $context = $this->context($document, $keys);
 
-        $sessionKey = new Keys\WrappedSessionKey(
+        $sessionKey = new Keys\GeneratedSessionKey(
             Certificate::fromFile(Oracle::certPath('java-server.crt')),
             EncKeyRef::Thumbprint,
         );
         (new Outbound\Timestamp())($context);
-        (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
+        (new Outbound\Signature(new Signing\Symmetric($sessionKey)))
             ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
             ->withParts([Part::body(), Part::timestamp()])($context);
         (new Outbound\Encryption($sessionKey))->withParts([Part::body()])($context);
@@ -317,7 +318,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         self::assertSame(200, $signed['status'], 'oracle /sign failed: '.$signed['body']);
 
         $document = Document::fromXmlString($signed['body']);
-        $context = new WsseContext($document, SoapVersion::Soap12, $this->profile());
+        $context = new WsseContext($document, SoapVersion::Soap12, $this->profile(), new ExchangeKeys());
 
         // Decrypt first, as the inbound order requires: it unwraps the key with our private key and opens the
         // Body. That is a key we can read, and still not one we established.
@@ -339,15 +340,15 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         $document = Document::fromXmlString(Oracle::sampleEnvelope());
         $context = $this->context($document, $keys);
 
-        $sessionKey = new Keys\WrappedSessionKey(
+        $sessionKey = new Keys\GeneratedSessionKey(
             Certificate::fromFile(Oracle::certPath('java-server.crt')),
             EncKeyRef::Thumbprint,
         );
         (new Outbound\Timestamp())($context);
-        (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
+        (new Outbound\Signature(new Signing\Symmetric($sessionKey)))
             ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
             ->withParts([Part::body(), Part::timestamp()])($context);
-        (new Outbound\Signature(new Outbound\CertificateSigningKey(
+        (new Outbound\Signature(new Signing\Asymmetric(
             ClientCertificate::fromFile(Oracle::certPath('php-client.pem')),
             KeyRef::BinarySecurityToken,
         )))->withParts([Part::primarySignature()])($context);
@@ -377,7 +378,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         $secret = $this->preSharedKey();
 
         (new Outbound\Timestamp())($context);
-        (new Outbound\Signature(new Outbound\SymmetricSigningKey($secret)))
+        (new Outbound\Signature(new Signing\Symmetric($secret)))
             ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
             ->withParts([Part::body(), Part::timestamp()])($context);
         (new Outbound\Encryption($secret))->withParts([Part::body()])($context);
@@ -404,7 +405,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         $secret = $this->preSharedKey();
 
         // No private key anywhere: nothing was wrapped, so there is nothing to unwrap.
-        (new Inbound\Decrypt())->withPreSharedKey($secret)($this->context($document, $keys));
+        (Inbound\Decrypt::fromEstablishedKeys())->withPreSharedKey($secret)($this->context($document, $keys));
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
             ->withPreSharedKey($secret)($this->context($document, $keys));
 
@@ -427,7 +428,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         );
 
         $this->expectException(SecurityFault::class);
-        (new Inbound\Decrypt())->withPreSharedKey($other)($this->context($document, new ExchangeKeys()));
+        (Inbound\Decrypt::fromEstablishedKeys())->withPreSharedKey($other)($this->context($document, new ExchangeKeys()));
     }
 
     /** The secret and name this harness pretends the two sides agreed out of band. */
@@ -453,11 +454,11 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         bool $endorse = false,
     ): string {
         $document = Document::fromXmlString(Oracle::sampleEnvelope());
-        $context = new WsseContext($document, SoapVersion::Soap12, $this->profile());
+        $context = new WsseContext($document, SoapVersion::Soap12, $this->profile(), new ExchangeKeys());
 
         // One object handed to both blocks is what makes them share a key. Thumbprint because WSS4J resolves it
         // without needing the certificate in the message.
-        $sessionKey = new Keys\WrappedSessionKey(
+        $sessionKey = new Keys\GeneratedSessionKey(
             Certificate::fromFile(Oracle::certPath('java-server.crt')),
             EncKeyRef::Thumbprint,
             // AES-128 so the two blocks disagree about width unless each derives its own key, which is what
@@ -469,7 +470,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
 
         if ($sign) {
             $signingKey = $derivedKeys ? new Keys\DerivedSessionKey($sessionKey) : $sessionKey;
-            (new Outbound\Signature(new Outbound\SymmetricSigningKey($signingKey)))
+            (new Outbound\Signature(new Signing\Symmetric($signingKey)))
                 ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
                 ->withParts([Part::body(), Part::timestamp()])($context);
         }
@@ -484,7 +485,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         }
 
         if ($endorse) {
-            (new Outbound\Signature(new Outbound\CertificateSigningKey(
+            (new Outbound\Signature(new Signing\Asymmetric(
                 ClientCertificate::fromFile(Oracle::certPath('php-client.pem')),
                 KeyRef::BinarySecurityToken,
             )))->withParts([Part::primarySignature()])($context);

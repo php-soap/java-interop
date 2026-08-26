@@ -6,8 +6,10 @@ namespace SoapInterop\Tests\Wsse;
 
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
+use Soap\Psr18WsseMiddleware\WSSecurity\Signing;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
 use Soap\Psr18WsseMiddleware\WSSecurity\SoapVersion;
@@ -46,11 +48,11 @@ final class UsernameTokenInteropTest extends InteropTestCase
     public function test_php_signed_username_token_is_accepted_by_wss4j(): void
     {
         $document = Document::fromXmlString(Oracle::sampleEnvelope());
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
 
         (new Outbound\Timestamp())($context);
         (new Outbound\Username('interop-user', 'interop-secret', false))($context);
-        (new Outbound\Signature(new Outbound\CertificateSigningKey(
+        (new Outbound\Signature(new Signing\Asymmetric(
             ClientCertificate::fromFile(Oracle::certPath('php-client.pem')),
         )))->withParts([Part::body(), Part::timestamp(), Part::usernameToken()])($context);
 
@@ -62,7 +64,7 @@ final class UsernameTokenInteropTest extends InteropTestCase
     private function phpUsername(bool $digest): string
     {
         $document = Document::fromXmlString(Oracle::sampleEnvelope());
-        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile());
+        $context = new WsseContext($document, SoapVersion::Soap12, new SecurityProfile(), new ExchangeKeys());
 
         (new Outbound\Username('interop-user', 'interop-secret', $digest))($context);
 

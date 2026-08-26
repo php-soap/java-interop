@@ -14,6 +14,7 @@ use Soap\Psr18AttachmentsMiddleware\Multipart\AttachmentType;
 use Soap\Psr18AttachmentsMiddleware\Multipart\RequestBuilder;
 use Soap\Psr18AttachmentsMiddleware\Multipart\ResponseBuilder;
 use Soap\Psr18AttachmentsMiddleware\Storage\AttachmentStorage;
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
 use Soap\Psr18WsseMiddleware\KeyStore\Key;
@@ -26,6 +27,7 @@ use Soap\Psr18WsseMiddleware\WSSecurity\Exception\SecurityFault;
 use Soap\Psr18WsseMiddleware\WSSecurity\Exception\UnsupportedAttachmentHeaderForm;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound;
+use Soap\Psr18WsseMiddleware\WSSecurity\Signing;
 use Soap\Psr18WsseMiddleware\WSSecurity\Part;
 use Soap\Psr18WsseMiddleware\WSSecurity\SecurityProfile;
 use Soap\Psr18WsseMiddleware\WSSecurity\SoapVersion;
@@ -143,7 +145,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
             ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))(
-                new WsseContext($document, self::soapVersionFor($type), new SecurityProfile()),
+                new WsseContext($document, self::soapVersionFor($type), new SecurityProfile(), new ExchangeKeys()),
             );
 
         // Reaching here is the pass: the block throws rather than returning a verdict.
@@ -169,7 +171,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         (new Inbound\Decrypt($this->privateKey()))
             ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))(
-                new WsseContext($document, self::soapVersionFor($type), new SecurityProfile()),
+                new WsseContext($document, self::soapVersionFor($type), new SecurityProfile(), new ExchangeKeys()),
             );
 
         self::assertSame(
@@ -195,7 +197,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         $this->expectException(SecurityFault::class);
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
             ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
             );
     }
 
@@ -247,8 +249,9 @@ final class AttachmentSecurityTest extends InteropTestCase
             $document,
             SoapVersion::Soap11,
             new SecurityProfile(),
+            new ExchangeKeys()
         ));
-        (new Outbound\Signature(new Outbound\CertificateSigningKey($this->clientCertificate())))
+        (new Outbound\Signature(new Signing\Asymmetric($this->clientCertificate())))
             ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Complete))($context);
 
         $result = $this->javaCheck(
@@ -350,7 +353,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
             ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Complete))(
-                new WsseContext($document, self::soapVersionFor($type), new SecurityProfile()),
+                new WsseContext($document, self::soapVersionFor($type), new SecurityProfile(), new ExchangeKeys()),
             );
 
         self::assertSame(
@@ -370,7 +373,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         $this->expectException(SecurityFault::class);
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
             ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Complete))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
             );
     }
 
@@ -386,7 +389,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         (new Inbound\Decrypt($this->privateKey()))
             ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Complete))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
             );
 
         $opened = $this->onlyAttachment($storage);
@@ -437,9 +440,9 @@ final class AttachmentSecurityTest extends InteropTestCase
         $this->expectException(UnsupportedAttachmentHeaderForm::class);
         $this->expectExceptionMessage('"Content-Description" is the one header');
 
-        (new Outbound\Signature(new Outbound\CertificateSigningKey($this->clientCertificate())))
+        (new Outbound\Signature(new Signing\Asymmetric($this->clientCertificate())))
             ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Complete))(
-                new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
             );
     }
 
@@ -459,9 +462,9 @@ final class AttachmentSecurityTest extends InteropTestCase
         $this->expectException(UnsupportedAttachmentHeaderForm::class);
         $this->expectExceptionMessage('"Content-Type" carries a comment');
 
-        (new Outbound\Signature(new Outbound\CertificateSigningKey($this->clientCertificate())))
+        (new Outbound\Signature(new Signing\Asymmetric($this->clientCertificate())))
             ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Complete))(
-                new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
             );
     }
 
@@ -523,7 +526,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
             ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
             );
 
         self::assertSame(
@@ -566,7 +569,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
             ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Complete))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
             );
 
         self::assertSame($payload, $this->onlyAttachment($storage)->content->rewind()->getContents());
@@ -600,7 +603,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
             ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Complete))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
             );
 
         self::assertSame($payload, $this->onlyAttachment($storage)->content->rewind()->getContents());
@@ -638,9 +641,9 @@ final class AttachmentSecurityTest extends InteropTestCase
         $this->expectException(SigningFailed::class);
         $this->expectExceptionMessage('could not be read as a document');
 
-        (new Outbound\Signature(new Outbound\CertificateSigningKey($this->clientCertificate())))
+        (new Outbound\Signature(new Signing\Asymmetric($this->clientCertificate())))
             ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Content))(
-                new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext(Document::fromXmlString(self::envelope()), SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
             );
     }
 
@@ -666,7 +669,7 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
             ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))(
-                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile(), new ExchangeKeys()),
             );
 
         self::assertSame(
@@ -732,17 +735,17 @@ final class AttachmentSecurityTest extends InteropTestCase
         ));
 
         $document = Document::fromXmlString(self::envelope($type));
-        $context = new WsseContext($document, self::soapVersionFor($type), new SecurityProfile());
+        $context = new WsseContext($document, self::soapVersionFor($type), new SecurityProfile(), new ExchangeKeys());
 
         (new Outbound\Timestamp(300))($context);
 
         if ($sign) {
-            (new Outbound\Signature(new Outbound\CertificateSigningKey($this->clientCertificate())))
+            (new Outbound\Signature(new Signing\Asymmetric($this->clientCertificate())))
                 ->withAttachments(AttachmentParts::request($storage, $coverage))($context);
         }
 
         if ($encrypt) {
-            (new Outbound\Encryption(new Keys\WrappedSessionKey($this->recipientCertificate())))
+            (new Outbound\Encryption(new Keys\GeneratedSessionKey($this->recipientCertificate())))
                 ->withParts([])
                 ->withAttachments(AttachmentParts::request($storage, ExternalPartCoverage::Content))($context);
         }
@@ -781,14 +784,16 @@ final class AttachmentSecurityTest extends InteropTestCase
         $document = Document::fromXmlString(self::envelope(AttachmentType::Swa));
         $context = new WsseContext($document, self::soapVersionFor(AttachmentType::Swa), new SecurityProfile(
             crypto: new CryptoPolicy(acceptedSignatureMethods: [SignatureMethod::HMAC_SHA256]),
-        ));
+        ),
+            new ExchangeKeys()
+        );
 
         // One source handed to both blocks, so the signature is an HMAC keyed by the same key the attachment is
         // encrypted under.
-        $sessionKey = new Keys\WrappedSessionKey($this->recipientCertificate(), EncKeyRef::Thumbprint);
+        $sessionKey = new Keys\GeneratedSessionKey($this->recipientCertificate(), EncKeyRef::Thumbprint);
 
         (new Outbound\Timestamp(300))($context);
-        (new Outbound\Signature(new Outbound\SymmetricSigningKey($sessionKey)))
+        (new Outbound\Signature(new Signing\Symmetric($sessionKey)))
             ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
             ->withParts([Part::body(), Part::timestamp()])($context);
         (new Outbound\Encryption($sessionKey))

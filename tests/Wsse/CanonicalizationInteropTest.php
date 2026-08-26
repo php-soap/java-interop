@@ -7,6 +7,7 @@ namespace SoapInterop\Tests\Wsse;
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use SoapInterop\Tests\Support\Wsse;
+use Soap\Psr18WsseMiddleware\WSSecurity\Keys\ExchangeKeys;
 use Soap\Psr18WsseMiddleware\Algorithm\SignatureCanonicalization;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
@@ -67,7 +68,7 @@ final class CanonicalizationInteropTest extends InteropTestCase
             SignatureCanonicalization::EXC_C14N_COMMENTS,
         ]));
         $document = Document::fromXmlString($javaSigned);
-        $context = new WsseContext($document, SoapVersion::Soap12, $profile);
+        $context = new WsseContext($document, SoapVersion::Soap12, $profile, new ExchangeKeys());
         $trust = TrustStore::fromCertificates(Certificate::fromFile(Oracle::certPath('ca.crt')));
 
         (new Inbound\VerifySignature($trust, signed: [Part::body(), Part::timestamp()]))($context);
