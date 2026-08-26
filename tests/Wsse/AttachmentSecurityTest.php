@@ -547,6 +547,55 @@ final class AttachmentSecurityTest extends InteropTestCase
         );
     }
 
+    #[DataProvider('xmlShapes')]
+    public function test_php_verifies_an_xml_attachment_wss4j_covered_completely(string $payload): void
+    {
+        // The ordering case. A complete coverage writes the canonical header block and then the content the
+        // transform produced; putting the two through the transform together would hand an XML canonicalizer
+        // a header block to parse. Only a peer can say which of the two a signature was taken over.
+        [$document, $storage] = $this->javaSecured(
+            $payload,
+            signAttachments: true,
+            mimeType: 'application/xml',
+            signCoverage: 'Element',
+        );
+
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Complete))(
+                new WsseContext($document, SoapVersion::Soap11, new SecurityProfile()),
+            );
+
+        self::assertSame($payload, $this->onlyAttachment($storage)->content->rewind()->getContents());
+    }
+
+    #[DataProvider('xmlShapes')]
+    public function test_wss4j_verifies_an_xml_attachment_php_covered_completely(string $payload): void
+    {
+        $result = $this->javaCheck(
+            $this->phpSecure($payload, sign: true, mimeType: 'application/xml', coverage: ExternalPartCoverage::Complete),
+            signAttachments: true,
+            signCoverage: 'Element',
+        );
+
+        self::assertTrue($result['valid'], 'WSS4J rejected a PHP-signed XML attachment covered completely: '.($result['error'] ?? ''));
+    }
+
+    public function test_wss4j_verifies_a_text_attachment_php_covered_completely(): void
+    {
+        // The same ordering question for the other transform, where getting it wrong happens to produce the
+        // right bytes: the header block already ends every line in CRLF, so normalizing it changes nothing.
+        // Pinned so that stays a fact about the data rather than an accident nobody would notice breaking.
+        $payload = "line one\nline two\r\nline three\rline four";
+
+        $result = $this->javaCheck(
+            $this->phpSecure($payload, sign: true, mimeType: 'text/plain', coverage: ExternalPartCoverage::Complete),
+            signAttachments: true,
+            signCoverage: 'Element',
+        );
+
+        self::assertTrue($result['valid'], 'WSS4J rejected a PHP-signed text attachment covered completely: '.($result['error'] ?? ''));
+    }
+
     public function test_php_refuses_an_xml_attachment_carrying_a_doctype(): void
     {
         // WSS4J's parser refuses a doctype outright, so refusing is what keeps the two sides agreeing rather
