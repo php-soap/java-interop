@@ -760,20 +760,14 @@ final class AttachmentSecurityTest extends InteropTestCase
     }
 
     /**
-     * WSS4J cannot read an attachment encrypted under a key a signature also uses, and this pins that.
+     * An attachment encrypted under a key a symmetric signature also uses.
      *
      * Sharing the key detaches the xenc:ReferenceList, and a detached list is what makes each
-     * xenc:EncryptedData name its own key by an #EncryptedKeySHA1 identifier. WSS4J reads exactly that for an
-     * in-document part, and its attachment path does not: an xenc:EncryptedData carrying a
-     * xenc:CipherReference is resolved through Santuario, which has never heard of a
-     * wsse:SecurityTokenReference and reports unsupportedKeyId. Adding the session-key callback the verifier
-     * and the decryptor use does not help, because the refusal happens before any callback is consulted.
-     *
-     * Nothing here is broken: this is a peer limitation on one combination, and it is pinned rather than
-     * skipped so that a WSS4J release which lifts it shows up as a failing assertion. Encrypt attachments
-     * under a key of their own, which is the ordinary configuration and which the tests above cover.
+     * xenc:EncryptedData name its own key by an #EncryptedKeySHA1 identifier. WSS4J resolves that identifier
+     * through a callback and nowhere else, on the attachment path as much as anywhere: this is the row that
+     * proves the attachment endpoint needs the same session-key callback the verifier and the decryptor have.
      */
-    public function test_wss4j_cannot_read_an_attachment_encrypted_under_a_shared_key(): void
+    public function test_wss4j_reads_an_attachment_encrypted_under_a_shared_key(): void
     {
         $storage = new AttachmentStorage();
         $storage->requestAttachments()->add(new Attachment(
@@ -806,8 +800,7 @@ final class AttachmentSecurityTest extends InteropTestCase
             encryptAttachments: true,
         );
 
-        self::assertFalse($result['valid'], 'WSS4J read a shared-key attachment; this limitation may have been lifted');
-        self::assertStringContainsString('unsupportedKeyId', (string) ($result['error'] ?? ''));
+        self::assertTrue($result['valid'], 'WSS4J refused the shared-key attachment: '.(string) ($result['error'] ?? ''));
     }
 
     /** Packs a SOAP part plus the storage's request attachments into a multipart request. */

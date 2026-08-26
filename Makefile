@@ -7,6 +7,11 @@
 MVN_IMG  := maven:3-eclipse-temurin-21
 JAR      := oracle/target/java-interop-oracle.jar
 
+# Every file the jar is built from. Without these as prerequisites make treats an existing jar as up to date and
+# silently skips the build, so an edit under oracle/ is measured against the previous oracle: a negative interop
+# result that is really a stale build, and a confident wrong conclusion. This has cost real time.
+ORACLE_SRC := oracle/pom.xml $(shell find oracle/src -type f 2>/dev/null)
+
 # Optional: SUITE=wsse|attachments restricts the run to one testsuite.
 SUITE    :=
 SUITE_ARG = $(if $(SUITE),--testsuite $(SUITE),)
@@ -30,7 +35,7 @@ RUN_PHP = cp composer.json composer.run.json && \
 help:
 	@echo "Targets (Docker-only; only prerequisite is Docker):"
 	@echo "  make interop [SUITE=wsse|attachments]  one command: jar -> images -> certs -> up -> test -> down"
-	@echo "  make jar      build the oracle fat jar via the maven docker image (~/.m2 cached)"
+	@echo "  make jar      build the oracle fat jar via the maven docker image (~/.m2 cached; rebuilds on edit)"
 	@echo "  make certs    (re)generate the shared cert material"
 	@echo "  make images   build the oracle + php docker images"
 	@echo "  make up       start the oracle and wait until healthy"
@@ -39,7 +44,7 @@ help:
 	@echo "  make clean    remove the built jar and compose volumes"
 
 jar: $(JAR)
-$(JAR):
+$(JAR): $(ORACLE_SRC)
 	docker run --rm -v "$(CURDIR):/app" -w /app -v "$(HOME)/.m2:/root/.m2" \
 	  $(MVN_IMG) mvn -B -f oracle/pom.xml -DskipTests package
 

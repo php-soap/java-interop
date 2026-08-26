@@ -146,7 +146,11 @@ final class AttachmentSecurity {
         RequestData data = new RequestData();
         data.setSigVerCrypto(crypto);
         data.setDecCrypto(crypto);
-        data.setCallbackHandler(new CallbackHandlerStub(KEYSTORE_PASSWORD, config.usernamePassword));
+        // Wrapped for the same reason the verifier and the decryptor wrap theirs: an #EncryptedKeySHA1
+        // reference is resolved through a callback and nowhere else, so an attachment encrypted under a key a
+        // signature also uses cannot be opened without one.
+        data.setCallbackHandler(new SessionKeyCallbackHandler(
+                new CallbackHandlerStub(KEYSTORE_PASSWORD, config.usernamePassword), data));
         data.setAttachmentCallbackHandler(attachmentHandler);
         data.setWssConfig(WSSConfig.getNewInstance());
         data.setDisableBSPEnforcement(config.disableBspEnforcement);
