@@ -57,6 +57,14 @@ final class SymmetricBinding {
         // paths trigger it lazily, this one does not.
         org.apache.xml.security.Init.init();
 
+        if (config.preSharedKey) {
+            // Nothing to convey: both sides hold the key, so no xenc:EncryptedKey is written and the blocks
+            // name the key by the identifier the two agreed on.
+            applyPreShared(document, header, signedParts);
+
+            return;
+        }
+
         SecretKey sessionKey = sessionKey();
         WSSecEncryptedKey encryptedKey = encryptedKey(header);
         encryptedKey.prepare(crypto, sessionKey);
@@ -140,6 +148,36 @@ final class SymmetricBinding {
         encrypt.setSymmetricEncAlgorithm(Encryptor.dataAlgorithm(config.dataEncryptionAlgorithm));
         encrypt.getParts().add(bodyContent(document));
         encrypt.build(sessionKey.getEncoded());
+    }
+
+    /**
+     * Sign and encrypt with a secret both sides already hold, named by the identifier they agreed on. No
+     * xenc:EncryptedKey and nothing derived: this is the {@code ENC_SYM_ENC_KEY=false} shape.
+     */
+    private void applyPreShared(Document document, WSSecHeader header, List<WSEncryptionPart> signedParts)
+            throws Exception {
+
+        SecretKey secret = new javax.crypto.spec.SecretKeySpec(PreSharedSecret.KEY, "AES");
+
+        WSSecSignature signature = new WSSecSignature(header);
+        signature.setKeyIdentifierType(WSConstants.CUSTOM_KEY_IDENTIFIER);
+        signature.setCustomTokenValueType(PreSharedSecret.VALUE_TYPE);
+        signature.setCustomTokenId(PreSharedSecret.IDENTIFIER);
+        signature.setSecretKey(PreSharedSecret.KEY);
+        signature.setSignatureAlgorithm(macAlgorithm());
+        signature.setDigestAlgo(WSConstants.SHA256);
+        signature.setSigCanonicalization(Signer.canonicalizationUri(config.canonicalization));
+        signature.getParts().addAll(signedParts);
+        signature.build(crypto);
+
+        WSSecEncrypt encrypt = new WSSecEncrypt(header);
+        encrypt.setEncryptSymmKey(false);
+        encrypt.setKeyIdentifierType(WSConstants.CUSTOM_KEY_IDENTIFIER);
+        encrypt.setCustomReferenceValue(PreSharedSecret.VALUE_TYPE);
+        encrypt.setEncKeyId(PreSharedSecret.IDENTIFIER);
+        encrypt.setSymmetricEncAlgorithm(Encryptor.dataAlgorithm(config.dataEncryptionAlgorithm));
+        encrypt.getParts().add(bodyContent(document));
+        encrypt.build(crypto, secret);
     }
 
     /** The SOAP Body content, as the part list every symmetric flow here covers. */

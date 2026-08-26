@@ -406,6 +406,9 @@ public final class OracleServer {
         if (q.containsKey("derivedkeys")) {
             config.requireDerivedKeys = Boolean.parseBoolean(q.get("derivedkeys"));
         }
+        if (q.containsKey("presharedkey")) {
+            config.preSharedKey = Boolean.parseBoolean(q.get("presharedkey"));
+        }
         if (q.containsKey("wscversion")) {
             // "2005/02" or "200512", named the way the namespaces are rather than by WSS4J's internal ordinals.
             config.wsSecureConversationVersion = "2005/02".equals(q.get("wscversion"))

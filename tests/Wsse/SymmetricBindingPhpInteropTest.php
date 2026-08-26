@@ -9,6 +9,7 @@ use Soap\Psr18WsseMiddleware\Algorithm\SignatureMethod;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
 use Soap\Psr18WsseMiddleware\KeyStore\ClientCertificate;
 use Soap\Psr18WsseMiddleware\KeyStore\Key;
+use Soap\Psr18WsseMiddleware\KeyStore\SessionKey;
 use Soap\Psr18WsseMiddleware\KeyStore\TrustStore;
 use Soap\Psr18WsseMiddleware\WSSecurity\Exception\SecurityFault;
 use Soap\Psr18WsseMiddleware\WSSecurity\Inbound;
@@ -41,6 +42,12 @@ use VeeWee\Xml\Dom\Document;
 final class SymmetricBindingPhpInteropTest extends InteropTestCase
 {
     private const PLAINTEXT_MARKER = 'hello from the interop harness';
+
+    /** Mirrors the oracle's PreSharedSecret, which is what "agreed out of band" means when the band is a suite. */
+    private const PRE_SHARED_SECRET = 'interop-pre-shared-secret-32byte';
+    private const PRE_SHARED_IDENTIFIER = 'aW50ZXJvcC1wcmVzaGFyZWQ=';
+    private const PRE_SHARED_VALUE_TYPE =
+        'http://docs.oasis-open.org/wss/oasis-wss-soap-message-security-1.1#EncryptedKeySHA1';
 
     // ----------------------------------------------------------------- PHP -> WSS4J
 
@@ -350,6 +357,86 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
 
         (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body(), Part::timestamp()]))(
             $this->context($document, $keys),
+        );
+    }
+
+    // ----------------------------------------------------------------- pre-shared, both ways
+
+    /**
+     * A secret both sides already hold, with nothing conveyed in either direction.
+     *
+     * The agreed value type is the WSS 1.1 EncryptedKeySHA1 URI, which is the one a WSS4J peer wants: it is the
+     * only custom identifier WSS4J's emitter writes for a shared secret. Nothing here is a digest of any cipher
+     * bytes, and it does not have to be. The URI names the shape of the reference rather than how the value was
+     * arrived at, and WSS4J's reader hands the identifier to a callback whatever the type says.
+     */
+    public function test_wss4j_reads_a_php_binding_keyed_by_a_pre_shared_secret(): void
+    {
+        $document = Document::fromXmlString(Oracle::sampleEnvelope());
+        $context = $this->context($document, new ExchangeKeys());
+        $secret = $this->preSharedKey();
+
+        (new Outbound\Timestamp())($context);
+        (new Outbound\Signature(new Outbound\SymmetricSigningKey($secret)))
+            ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
+            ->withParts([Part::body(), Part::timestamp()])($context);
+        (new Outbound\Encryption($secret))->withParts([Part::body()])($context);
+
+        // Nothing conveys the key, which is the whole point of the shape.
+        self::assertStringNotContainsString('EncryptedKey>', $document->toXmlString());
+
+        $result = $this->verify($document->toXmlString());
+
+        self::assertTrue($result['valid'], 'WSS4J refused the pre-shared binding: '.$result['reason']);
+    }
+
+    public function test_php_reads_a_wss4j_binding_keyed_by_the_same_pre_shared_secret(): void
+    {
+        $signed = Oracle::post(
+            '/sign?symmetric=true&sigalg=HMAC_SHA256&presharedkey=true',
+            Oracle::sampleEnvelope(),
+        );
+        self::assertSame(200, $signed['status'], 'oracle /sign failed: '.$signed['body']);
+        self::assertStringNotContainsString('EncryptedKey>', $signed['body']);
+
+        $document = Document::fromXmlString($signed['body']);
+        $keys = new ExchangeKeys();
+        $secret = $this->preSharedKey();
+
+        // No private key anywhere: nothing was wrapped, so there is nothing to unwrap.
+        (new Inbound\Decrypt())->withPreSharedKey($secret)($this->context($document, $keys));
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))
+            ->withPreSharedKey($secret)($this->context($document, $keys));
+
+        self::assertStringContainsString(self::PLAINTEXT_MARKER, $document->toXmlString());
+    }
+
+    public function test_php_refuses_a_wss4j_pre_shared_binding_under_a_different_secret(): void
+    {
+        $signed = Oracle::post(
+            '/sign?symmetric=true&sigalg=HMAC_SHA256&presharedkey=true',
+            Oracle::sampleEnvelope(),
+        );
+        self::assertSame(200, $signed['status'], 'oracle /sign failed: '.$signed['body']);
+
+        $document = Document::fromXmlString($signed['body']);
+        $other = new Keys\PreSharedSessionKey(
+            SessionKey::fromBytes(str_repeat("\x2b", 32)),
+            self::PRE_SHARED_IDENTIFIER,
+            self::PRE_SHARED_VALUE_TYPE,
+        );
+
+        $this->expectException(SecurityFault::class);
+        (new Inbound\Decrypt())->withPreSharedKey($other)($this->context($document, new ExchangeKeys()));
+    }
+
+    /** The secret and name this harness pretends the two sides agreed out of band. */
+    private function preSharedKey(): Keys\PreSharedSessionKey
+    {
+        return new Keys\PreSharedSessionKey(
+            SessionKey::fromBytes(self::PRE_SHARED_SECRET),
+            self::PRE_SHARED_IDENTIFIER,
+            self::PRE_SHARED_VALUE_TYPE,
         );
     }
 

@@ -123,6 +123,13 @@ public final class ScenarioConfig {
     public int wsSecureConversationVersion = ConversationConstants.DEFAULT_VERSION;
 
     /**
+     * Key the symmetric binding from the secret both sides already hold rather than minting one, so no
+     * xenc:EncryptedKey is written at all. The {@code ENC_SYM_ENC_KEY=false} equivalent. Only read when
+     * {@link #symmetricBinding} is on.
+     */
+    public boolean preSharedKey = false;
+
+    /**
      * When true the signer puts the whole certification path in the wsse:BinarySecurityToken as an
      * ASN.1 SEQUENCE OF Certificate (#X509PKIPathv1) instead of the leaf certificate alone
      * (#X509v3), which is WSS4J's setUseSingleCertificate(false). Mirrors the PHP

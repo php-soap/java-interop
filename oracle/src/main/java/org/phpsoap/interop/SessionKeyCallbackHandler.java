@@ -52,8 +52,17 @@ final class SessionKeyCallbackHandler implements CallbackHandler {
         }
     }
 
-    /** @return the decrypted session key whose wrapped form digests to {@code identifier}, or null. */
+    /**
+     * @return the secret behind {@code identifier}: the pre-shared one when it is that, otherwise the decrypted
+     *         session key whose wrapped form digests to it, or null when neither
+     */
     private byte[] sessionKeyFor(String identifier) throws IOException {
+        // A secret both sides hold is named by the identifier they agreed on, and there is nothing in the
+        // message to derive it from.
+        if (PreSharedSecret.IDENTIFIER.equals(identifier)) {
+            return PreSharedSecret.KEY;
+        }
+
         WSDocInfo processed = data.getWsDocInfo();
         if (identifier == null || processed == null) {
             return null;
