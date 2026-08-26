@@ -106,12 +106,9 @@ final class Oracle
 
         $responseBody = curl_exec($ch);
         if ($responseBody === false) {
-            curl_close($ch);
-
             return null;
         }
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         if ($withResponseHeaders) {
             return ['status' => $status, 'body' => (string) $responseBody, 'contentType' => $responseContentType];
