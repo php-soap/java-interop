@@ -37,6 +37,7 @@ use Soap\Psr18WsseMiddleware\XmlSecurity\ExternalPartCoverage;
 use SoapInterop\Tests\Support\InteropTestCase;
 use SoapInterop\Tests\Support\Oracle;
 use VeeWee\Xml\Dom\Document;
+use Dom\Element;
 use Soap\Psr18WsseMiddleware\Algorithm\SignatureMethod;
 use Soap\Psr18WsseMiddleware\WSSecurity\Outbound\KeyReference\EncKeyRef;
 use Soap\Psr18WsseMiddleware\XmlSecurity\CryptoPolicy;
@@ -770,6 +771,76 @@ final class AttachmentSecurityTest extends InteropTestCase
      * through a callback and nowhere else, on the attachment path as much as anywhere: this is the row that
      * proves the attachment endpoint needs the same session-key callback the verifier and the decryptor have.
      */
+    /**
+     * The inbound half of the shared-key attachment, which is the direction the harness could not previously
+     * test: the outbound row below has WSS4J read what we emit, and the unit coverage round-trips this shape
+     * against our own reader only.
+     *
+     * What is new here is the DETACHED reference list. A shared key cannot nest the list inside the
+     * xenc:EncryptedKey, so it stands beside it and each xenc:EncryptedData names the key instead. Every other
+     * peer-emitted attachment row reaches the attachment through a nested list, so following a detached one to
+     * an attachment's xenc:EncryptedData had only ever been read back from our own writer.
+     *
+     * It does NOT exercise resolving the key by that EncryptedKeySHA1 name: the oracle wraps the key to us in
+     * the same message, and the decryptor prefers a wrapped key over a named one. The correlated case, where
+     * the answer carries no key at all because the request conveyed it, needs the oracle to answer a
+     * multipart request keyed by what it established, and is not covered by this row.
+     *
+     * Decryption only, and not because the signature is awkward to check: the oracle minted this key and
+     * wrapped it to us, so the MAC it keyed authenticates nobody and PHP refuses it on the reference it
+     * presents. That refusal is the design working, and it has a row of its own in
+     * SymmetricBindingPhpInteropTest. The message still carries the MAC, because that is what makes the key
+     * shared and so the list detached, which is the shape under test.
+     */
+    public function test_php_decrypts_an_attachment_wss4j_encrypted_under_a_shared_key(): void
+    {
+        $payload = $this->ramp(4096);
+
+        [$document, $storage] = $this->javaSecured(
+            $payload,
+            signAttachments: true,
+            encryptAttachments: true,
+            symmetric: true,
+        );
+
+        // Arrived as ciphertext, and under a key named rather than wrapped per element.
+        self::assertNotSame(
+            hash('sha256', $payload),
+            hash('sha256', $this->onlyAttachment($storage)->content->rewind()->getContents()),
+        );
+        self::assertStringContainsString('EncryptedKeySHA1', $document->toXmlString());
+
+        // The shape this row exists for: the list stands beside the key rather than inside it. Without this the
+        // row would keep passing if the oracle ever emitted the nested form, having tested the ordinary path.
+        $referenceList = $document->toUnsafeDocument()
+            ->getElementsByTagNameNS('http://www.w3.org/2001/04/xmlenc#', 'ReferenceList')
+            ->item(0);
+        self::assertInstanceOf(Element::class, $referenceList);
+        self::assertSame(
+            'Security',
+            $referenceList->parentNode instanceof Element ? $referenceList->parentNode->localName : null,
+            'the reference list must be detached from the xenc:EncryptedKey',
+        );
+
+        $context = new WsseContext(
+            $document,
+            self::soapVersionFor(AttachmentType::Swa),
+            new SecurityProfile(crypto: new CryptoPolicy(
+                acceptedSignatureMethods: [SignatureMethod::HMAC_SHA256],
+            )),
+            new ExchangeKeys(),
+        );
+
+        (new Inbound\Decrypt($this->privateKey()))
+            ->withAttachments(AttachmentParts::response($storage, ExternalPartCoverage::Content))($context);
+
+        self::assertSame(
+            hash('sha256', $payload),
+            hash('sha256', $this->onlyAttachment($storage)->content->rewind()->getContents()),
+            'PHP must recover exactly the bytes WSS4J encrypted under the shared key',
+        );
+    }
+
     public function test_wss4j_reads_an_attachment_encrypted_under_a_shared_key(): void
     {
         $storage = new AttachmentStorage();
@@ -844,6 +915,7 @@ final class AttachmentSecurityTest extends InteropTestCase
         string $mimeType = 'application/octet-stream',
         string $signCoverage = 'Content',
         string $encryptCoverage = 'Content',
+        bool $symmetric = false,
     ): array {
         $storage = new AttachmentStorage();
         $storage->requestAttachments()->add(new Attachment(
@@ -858,12 +930,15 @@ final class AttachmentSecurityTest extends InteropTestCase
 
         $response = Oracle::postRaw(
             sprintf(
-                '/attach/secure?protocol=%s&signatt=%s&encatt=%s&signcover=%s&enccover=%s&recipient=php-client',
+                '/attach/secure?protocol=%s&signatt=%s&encatt=%s&signcover=%s&enccover=%s&recipient=php-client'
+                .'&symmetric=%s&sigalg=%s',
                 self::protocolFor($type),
                 $signAttachments ? 'true' : 'false',
                 $encryptAttachments ? 'true' : 'false',
                 $signCoverage,
                 $encryptCoverage,
+                $symmetric ? 'true' : 'false',
+                $symmetric ? 'HMAC_SHA256' : 'RSA_SHA256',
             ),
             (string) $request->getBody(),
             $request->getHeaderLine('Content-Type'),

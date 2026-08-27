@@ -17,6 +17,7 @@ import org.apache.wss4j.dom.engine.WSSecurityEngineResult;
 import org.apache.wss4j.dom.handler.RequestData;
 import org.apache.wss4j.dom.handler.WSHandlerResult;
 import org.apache.wss4j.dom.message.WSSecEncrypt;
+import org.apache.wss4j.dom.message.WSSecEncryptedKey;
 import org.apache.wss4j.dom.message.WSSecHeader;
 import org.apache.wss4j.dom.message.WSSecSignature;
 import org.apache.wss4j.dom.message.WSSecTimestamp;
@@ -289,6 +290,10 @@ final class AttachmentSecurity {
             timestamp.build();
         }
 
+        if (config.symmetricBinding) {
+            return emit(document, secureUnderOneKey(document, header, parts), protocol);
+        }
+
         AttachmentCallbackHandler signHandler = new AttachmentCallbackHandler(parts);
         if (config.signAttachments) {
             WSSecSignature signature = new WSSecSignature(header);
@@ -367,6 +372,93 @@ final class AttachmentSecurity {
      * simply new. Order follows the message, with anything minted last, which is where a peer writing this
      * shape puts it.
      */
+    /**
+     * The symmetric-binding shape with attachments: one session key, wrapped to the recipient once, keying an
+     * HMAC signature and the attachment encryption both. What a peer emits under an sp:SymmetricBinding whose
+     * SignedParts and EncryptedParts name the attachments.
+     *
+     * <p>Its own method rather than a flag threaded through the asymmetric path, because the two differ in what
+     * keys each block: there a signature and an encryption are independent blocks that share a header, here they
+     * are two uses of one key and the key has to exist before either runs.
+     *
+     * <p>The reference list lands detached and every xenc:EncryptedData names the key by its EncryptedKeySHA1,
+     * which is the pair WSS4J's own reader requires and the only identifier a recipient can compute before it
+     * has unwrapped anything.
+     */
+    private List<Attachment> secureUnderOneKey(Document document, WSSecHeader header, List<Attachment> parts)
+            throws Exception {
+
+        org.apache.xml.security.Init.init();
+
+        KeyGenerator generator = KeyGenerator.getInstance("AES");
+        generator.init(256);
+        SecretKey sessionKey = generator.generateKey();
+
+        WSSecEncryptedKey encryptedKey = new WSSecEncryptedKey(header);
+        encryptedKey.setUserInfo(config.encryptionRecipientAlias);
+        encryptedKey.setKeyIdentifierType(Encryptor.keyIdentifierType(config.encryptionKeyReference));
+        encryptedKey.setKeyEncAlgo(Encryptor.keyAlgorithm(config.keyEncryptionAlgorithm));
+        encryptedKey.setDigestAlgorithm(Encryptor.oaepDigestAlgorithm(config.oaepDigest));
+        encryptedKey.setMGFAlgorithm(Encryptor.oaepMgfAlgorithm(config.oaepDigest));
+        encryptedKey.prepare(crypto, sessionKey);
+
+        AttachmentCallbackHandler signHandler = new AttachmentCallbackHandler(parts);
+        if (config.signAttachments) {
+            WSSecSignature signature = new WSSecSignature(header);
+            signature.setKeyIdentifierType(WSConstants.ENCRYPTED_KEY_SHA1_IDENTIFIER);
+            signature.setEncrKeySha1value(encryptedKey.getEncryptedKeySHA1());
+            signature.setSecretKey(sessionKey.getEncoded());
+            signature.setSignatureAlgorithm(Signer.signatureAlgorithm(config.signatureAlgorithm));
+            signature.setDigestAlgo(WSConstants.SHA256);
+            signature.setSigCanonicalization(Signer.canonicalizationUri(config.canonicalization));
+            signature.setAttachmentCallbackHandler(signHandler);
+
+            signature.getParts().add(
+                    new WSEncryptionPart(WSConstants.ELEM_BODY, soapNamespace(document), "Content"));
+            if (config.requireTimestamp) {
+                signature.getParts().add(new WSEncryptionPart("Timestamp", WSConstants.WSU_NS, "Element"));
+            }
+            if (!parts.isEmpty()) {
+                signature.getParts().add(
+                        new WSEncryptionPart(ALL_ATTACHMENTS, config.attachmentSignatureCoverage));
+            }
+
+            signature.build(crypto);
+        }
+
+        List<Attachment> current = signHandler.results().isEmpty() ? parts : signHandler.results();
+
+        AttachmentCallbackHandler encryptHandler = new AttachmentCallbackHandler(current);
+        if (config.encryptAttachments) {
+            WSSecEncrypt encrypt = new WSSecEncrypt(header);
+            // The key is already on the wire above, so this references it rather than wrapping a second copy,
+            // which is also what makes WSS4J detach the reference list.
+            encrypt.setEncryptSymmKey(false);
+            encrypt.setKeyIdentifierType(WSConstants.ENCRYPTED_KEY_SHA1_IDENTIFIER);
+            encrypt.setCustomReferenceValue(encryptedKey.getEncryptedKeySHA1());
+            encrypt.setSymmetricEncAlgorithm(Encryptor.dataAlgorithm(config.dataEncryptionAlgorithm));
+            encrypt.setAttachmentCallbackHandler(encryptHandler);
+
+            if (config.requireEncryption) {
+                encrypt.getParts().add(
+                        new WSEncryptionPart(WSConstants.ELEM_BODY, soapNamespace(document), "Content"));
+            }
+            encrypt.getParts().add(
+                    new WSEncryptionPart(ALL_ATTACHMENTS, config.attachmentEncryptionCoverage));
+
+            encrypt.build(crypto, sessionKey);
+            encrypt.addAttachmentEncryptedDataElements();
+
+            current = merge(current, encryptHandler.results());
+        }
+
+        // Last, so it lands in front of everything that needs it: a reader holds the key by the time the
+        // reference list asks it to decrypt.
+        encryptedKey.prependToHeader();
+
+        return current;
+    }
+
     private static List<Attachment> merge(List<Attachment> current, List<Attachment> results) {
         if (results.isEmpty()) {
             return current;
