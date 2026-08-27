@@ -42,10 +42,12 @@ final class SymmetricBinding {
 
     private final Crypto crypto;
     private final ScenarioConfig config;
+    private final String keyPassword;
 
-    SymmetricBinding(Crypto crypto, ScenarioConfig config) {
+    SymmetricBinding(Crypto crypto, ScenarioConfig config, String keyPassword) {
         this.crypto = crypto;
         this.config = config;
+        this.keyPassword = keyPassword;
     }
 
     /**
@@ -111,6 +113,8 @@ final class SymmetricBinding {
         signature.getParts().addAll(signedParts);
         signature.build(crypto);
 
+        endorse(header, signature);
+
         WSSecEncrypt encrypt = new WSSecEncrypt(header);
         encrypt.setEncryptSymmKey(false);
         encrypt.setKeyIdentifierType(WSConstants.ENCRYPTED_KEY_SHA1_IDENTIFIER);
@@ -118,6 +122,53 @@ final class SymmetricBinding {
         encrypt.setSymmetricEncAlgorithm(Encryptor.dataAlgorithm(config.dataEncryptionAlgorithm));
         encrypt.getParts().add(bodyContent(document));
         encrypt.build(crypto, sessionKey);
+    }
+
+    /**
+     * Add an endorsing supporting token over a signature already built: a second signature keyed by this
+     * server's certificate covering the primary one, which is what sp:EndorsingSupportingTokens asks for.
+     *
+     * <p>Under {@link ScenarioConfig#protectEndorsingToken} it also covers its own wsse:BinarySecurityToken,
+     * the way CXF's AbstractBindingBuilder does when the binding asks for token protection. That variant is
+     * the one worth emitting: a receiver may recognise an endorsement by it covering a signature, and one that
+     * additionally requires it to cover nothing else refuses this message.
+     *
+     * <p>Runs before the encryption block so the endorsement covers the signature as the signature stands, and
+     * so sign-then-encrypt still describes the message.
+     */
+    private void endorse(WSSecHeader header, WSSecSignature endorsed) throws Exception {
+        if (!config.endorseSignature) {
+            return;
+        }
+
+        WSSecSignature endorsement = new WSSecSignature(header);
+        endorsement.setUserInfo(config.signatureKeyAlias, keyPassword);
+        endorsement.setKeyIdentifierType(WSConstants.BST_DIRECT_REFERENCE);
+        endorsement.setSignatureAlgorithm(WSConstants.RSA_SHA256);
+        endorsement.setDigestAlgo(WSConstants.SHA256);
+        endorsement.setSigCanonicalization(Signer.canonicalizationUri(config.canonicalization));
+
+        WSEncryptionPart primary = new WSEncryptionPart(endorsed.getId());
+        primary.setElement(endorsed.getSignatureElement());
+        endorsement.getParts().add(primary);
+
+        if (config.protectEndorsingToken) {
+            // The token has to reach its final position before it is digested: prepare() leaves it detached,
+            // and moving it afterwards changes the namespaces it inherits and so the canonical form the digest
+            // was taken over. build() gets away with digesting first because it prepends the same element it
+            // just created; here the element is also a signing target.
+            endorsement.prepare(crypto);
+            endorsement.prependBSTElementToHeader();
+
+            WSEncryptionPart token = new WSEncryptionPart(endorsement.getBSTTokenId());
+            token.setElement(endorsement.getBinarySecurityTokenElement());
+            endorsement.getParts().add(token);
+            endorsement.computeSignature(endorsement.addReferencesToSign(endorsement.getParts()), false, null);
+
+            return;
+        }
+
+        endorsement.build(crypto);
     }
 
     /**

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace SoapInterop\Tests\Wsse;
 
+use Dom\Element;
 use Soap\Psr18WsseMiddleware\Algorithm\DataEncryptionMethod;
 use Soap\Psr18WsseMiddleware\Algorithm\SignatureMethod;
 use Soap\Psr18WsseMiddleware\KeyStore\Certificate;
@@ -258,6 +259,75 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
     }
 
     /** A request that establishes a session key in the given exchange, as a real one would. */
+    /**
+     * An endorsed response a peer actually built, which is the direction this package could not previously be
+     * tested in: the endorsing rows either had WSS4J verify what we emitted, or had us read back our own
+     * message. Every defect in this feature came from a shape only ever round-tripped against our own reader,
+     * and the endorsement rule was the last one still in that position.
+     *
+     * The oracle MACs the answer with the key the request conveyed and then signs that signature with its own
+     * certificate, so the response carries two signatures keyed by two different things. What PHP has to get
+     * right is that the certificate one is an endorsement rather than a second party contributing coverage.
+     */
+    public function test_php_reads_a_wss4j_response_endorsed_by_a_certificate(): void
+    {
+        $keys = new ExchangeKeys();
+        $response = $this->wss4jResponseTo($this->establishedRequest($keys), endorse: true);
+
+        self::assertCount(2, $this->signatures($response), 'the oracle did not endorse its answer');
+
+        $inbound = $this->context($response, $keys);
+        (new Inbound\Decrypt(useEstablishedKey: true))($inbound);
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()], useEstablishedKey: true))($inbound);
+
+        self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
+    }
+
+    /**
+     * The same, with the endorsement covering its own wsse:BinarySecurityToken as well as the primary
+     * signature, which is what sp:ProtectTokens makes CXF emit: AbstractBindingBuilder adds the BST to the
+     * endorsement's reference list whenever the binding asks for token protection.
+     *
+     * This row exists because a receiver that recognises an endorsement by it covering *only* a signature
+     * refuses this message, and that is exactly the defect this harness failed to catch the first time.
+     */
+    public function test_php_reads_a_wss4j_response_whose_endorsement_covers_its_own_token(): void
+    {
+        $keys = new ExchangeKeys();
+        $response = $this->wss4jResponseTo(
+            $this->establishedRequest($keys),
+            endorse: true,
+            protectTokens: true,
+        );
+
+        self::assertCount(2, $this->signatures($response), 'the oracle did not endorse its answer');
+
+        $inbound = $this->context($response, $keys);
+        (new Inbound\Decrypt(useEstablishedKey: true))($inbound);
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()], useEstablishedKey: true))($inbound);
+
+        self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
+    }
+
+    /**
+     * The ds:Signature elements the message carries, so a row can pin that the oracle emitted the shape it was
+     * asked for before drawing any conclusion from PHP accepting it.
+     *
+     * @return list<Element>
+     */
+    private function signatures(Document $document): array
+    {
+        $found = [];
+        foreach ($document->toUnsafeDocument()->getElementsByTagNameNS(
+            'http://www.w3.org/2000/09/xmldsig#',
+            'Signature',
+        ) as $element) {
+            $found[] = $element;
+        }
+
+        return $found;
+    }
+
     private function establishedRequest(ExchangeKeys $keys): string
     {
         $document = Document::fromXmlString(Oracle::sampleEnvelope());
@@ -281,12 +351,16 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         string $request,
         bool $derivedKeys = false,
         string $wscVersion = '200512',
+        bool $endorse = false,
+        bool $protectTokens = false,
     ): Document {
         $answered = Oracle::post(
             sprintf(
-                '/symmetric/respond?sigalg=HMAC_SHA256&derivedkeys=%s&wscversion=%s',
+                '/symmetric/respond?sigalg=HMAC_SHA256&derivedkeys=%s&wscversion=%s&endorse=%s&protecttokens=%s',
                 $derivedKeys ? 'true' : 'false',
                 urlencode($wscVersion),
+                $endorse ? 'true' : 'false',
+                $protectTokens ? 'true' : 'false',
             ),
             $request,
         );

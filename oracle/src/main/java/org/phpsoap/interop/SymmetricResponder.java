@@ -63,7 +63,7 @@ final class SymmetricResponder {
         WSSecHeader header = new WSSecHeader(response);
         header.insertSecurityHeader();
 
-        new SymmetricBinding(crypto, config).applyWithEstablishedKey(
+        new SymmetricBinding(crypto, config, keyPassword).applyWithEstablishedKey(
                 response,
                 header,
                 List.of(SymmetricBinding.bodyContentPart(response)),

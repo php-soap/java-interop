@@ -130,6 +130,27 @@ public final class ScenarioConfig {
     public boolean preSharedKey = false;
 
     /**
+     * Add an endorsing supporting token to what the symmetric binding emits: a second signature, keyed by this
+     * server's certificate, over the primary signature the session key produced. What
+     * {@code sp:EndorsingSupportingTokens} asks for, and the direction a client can only be tested in by
+     * receiving one, since a message it built itself proves only that it agrees with itself.
+     *
+     * <p>Only read when {@link #symmetricBinding} is on.
+     */
+    public boolean endorseSignature = false;
+
+    /**
+     * Make the endorsing signature cover its own wsse:BinarySecurityToken as well as the primary signature,
+     * which is what {@code sp:ProtectTokens} makes CXF do: AbstractBindingBuilder adds the BST to the
+     * endorsement's reference list whenever the binding asks for token protection.
+     *
+     * <p>Separate from {@link #endorseSignature} because it is the variant that catches a receiver which
+     * recognises an endorsement by it covering nothing but a signature. Only read when
+     * {@link #endorseSignature} is on.
+     */
+    public boolean protectEndorsingToken = false;
+
+    /**
      * When true the signer puts the whole certification path in the wsse:BinarySecurityToken as an
      * ASN.1 SEQUENCE OF Certificate (#X509PKIPathv1) instead of the leaf certificate alone
      * (#X509v3), which is WSS4J's setUseSingleCertificate(false). Mirrors the PHP

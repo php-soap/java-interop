@@ -72,7 +72,7 @@ final class Signer {
         if (config.symmetricBinding) {
             // One key, two blocks: signing and encryption are not independent here, so one collaborator emits
             // both rather than this method growing an encryption branch of its own.
-            new SymmetricBinding(crypto, config).apply(document, header, signedParts(document));
+            new SymmetricBinding(crypto, config, keyPassword).apply(document, header, signedParts(document));
         } else if (config.requireSignature) {
             WSSecSignature signature = new WSSecSignature(header);
             signature.setUserInfo(keyAlias, keyPassword);
