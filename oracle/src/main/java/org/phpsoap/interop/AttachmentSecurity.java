@@ -373,6 +373,86 @@ final class AttachmentSecurity {
      * shape puts it.
      */
     /**
+     * Answer a multipart request keyed by the session key that request established, with the attachment
+     * encrypted under it and no xenc:EncryptedKey travelling back.
+     *
+     * <p>This is the shape a correlated response takes, and the only one that makes a client resolve an
+     * attachment's key from what its own request conveyed: with a key wrapped in the message the decryptor
+     * prefers the wrapped one and the identifier is never read. So it is also the only way to test that path
+     * from outside.
+     *
+     * <p>The request's own attachments are echoed back, which keeps the fixture on the caller's side and is
+     * what a service returning a processed document looks like.
+     */
+    Attachments.EmitResult respondWithEstablishedKey(
+            byte[] body,
+            String contentType,
+            String protocol,
+            String keyPassword) throws Exception {
+
+        org.apache.xml.security.Init.init();
+        WSSConfig.init();
+
+        SOAPMessage request = parse(body, contentType, protocol);
+        Document requestDocument = request.getSOAPPart().getEnvelope().getOwnerDocument();
+        List<Attachment> parts = attachmentsOf(request);
+        if (parts.isEmpty()) {
+            throw new IllegalArgumentException("The request carried no attachment to answer with.");
+        }
+
+        // The key the request wrapped to us, and the name both sides can compute for it now that the element
+        // carrying it will not be in the answer.
+        SymmetricResponder responder = new SymmetricResponder(crypto, config, keyPassword);
+        String requestXml = Xml.serialize(requestDocument);
+        SecretKey sessionKey = new javax.crypto.spec.SecretKeySpec(responder.sessionKeyOf(requestXml), "AES");
+        String encryptedKeySha1 = responder.encryptedKeySha1Of(requestXml);
+
+        Document response = Xml.parse(SymmetricResponder.RESPONSE_ENVELOPE);
+        WSSecHeader header = new WSSecHeader(response);
+        header.setMustUnderstand(true);
+        header.insertSecurityHeader();
+
+        if (config.requireTimestamp) {
+            WSSecTimestamp timestamp = new WSSecTimestamp(header);
+            timestamp.setTimeToLive(config.timestampTimeToLiveSeconds);
+            timestamp.build();
+        }
+
+        AttachmentCallbackHandler signHandler = new AttachmentCallbackHandler(parts);
+        if (config.signAttachments) {
+            WSSecSignature signature = new WSSecSignature(header);
+            signature.setKeyIdentifierType(WSConstants.ENCRYPTED_KEY_SHA1_IDENTIFIER);
+            signature.setEncrKeySha1value(encryptedKeySha1);
+            signature.setSecretKey(sessionKey.getEncoded());
+            signature.setSignatureAlgorithm(Signer.signatureAlgorithm(config.signatureAlgorithm));
+            signature.setDigestAlgo(WSConstants.SHA256);
+            signature.setSigCanonicalization(Signer.canonicalizationUri(config.canonicalization));
+            signature.setAttachmentCallbackHandler(signHandler);
+            signature.getParts().add(
+                    new WSEncryptionPart(WSConstants.ELEM_BODY, soapNamespace(response), "Content"));
+            signature.getParts().add(
+                    new WSEncryptionPart(ALL_ATTACHMENTS, config.attachmentSignatureCoverage));
+            signature.build(crypto);
+        }
+
+        List<Attachment> current = signHandler.results().isEmpty() ? parts : signHandler.results();
+
+        AttachmentCallbackHandler encryptHandler = new AttachmentCallbackHandler(current);
+        WSSecEncrypt encrypt = new WSSecEncrypt(header);
+        encrypt.setEncryptSymmKey(false);
+        encrypt.setKeyIdentifierType(WSConstants.ENCRYPTED_KEY_SHA1_IDENTIFIER);
+        encrypt.setCustomReferenceValue(encryptedKeySha1);
+        encrypt.setSymmetricEncAlgorithm(Encryptor.dataAlgorithm(config.dataEncryptionAlgorithm));
+        encrypt.setAttachmentCallbackHandler(encryptHandler);
+        encrypt.getParts().add(new WSEncryptionPart(ALL_ATTACHMENTS, config.attachmentEncryptionCoverage));
+        encrypt.build(crypto, sessionKey);
+        encrypt.addAttachmentEncryptedDataElements();
+        current = merge(current, encryptHandler.results());
+
+        return emit(response, current, protocol);
+    }
+
+    /**
      * The symmetric-binding shape with attachments: one session key, wrapped to the recipient once, keying an
      * HMAC signature and the attachment encryption both. What a peer emits under an sp:SymmetricBinding whose
      * SignedParts and EncryptedParts name the attachments.

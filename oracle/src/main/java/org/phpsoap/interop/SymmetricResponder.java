@@ -74,7 +74,7 @@ final class SymmetricResponder {
     }
 
     /** The session key the request wrapped to us, unwrapped with our own private key. */
-    private byte[] sessionKeyOf(String requestXml) throws Exception {
+    byte[] sessionKeyOf(String requestXml) throws Exception {
         for (WSSecurityEngineResult result : process(requestXml)) {
             Integer action = (Integer) result.get(WSSecurityEngineResult.TAG_ACTION);
             byte[] secret = (byte[]) result.get(WSSecurityEngineResult.TAG_SECRET);
@@ -90,7 +90,7 @@ final class SymmetricResponder {
      * The identifier the response names the key by, which has to be the one the request minted: the digest is
      * over cipher bytes only the request carries, and the response carries no key of its own to digest.
      */
-    private String encryptedKeySha1Of(String requestXml) throws Exception {
+    String encryptedKeySha1Of(String requestXml) throws Exception {
         for (WSSecurityEngineResult result : process(requestXml)) {
             byte[] wrapped = (byte[]) result.get(WSSecurityEngineResult.TAG_ENCRYPTED_EPHEMERAL_KEY);
             if (wrapped != null) {

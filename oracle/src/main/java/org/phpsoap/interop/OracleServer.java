@@ -83,6 +83,7 @@ public final class OracleServer {
         http.createContext("/attach", server::handleAttach);
         http.createContext("/attach/secure", server::handleAttachSecure);
         http.createContext("/attach/check", server::handleAttachCheck);
+        http.createContext("/attach/respond", server::handleAttachRespond);
         http.setExecutor(java.util.concurrent.Executors.newFixedThreadPool(8));
         http.start();
 
@@ -264,6 +265,47 @@ public final class OracleServer {
         try {
             Attachments.EmitResult result =
                     new AttachmentSecurity(crypto, config).secure(requestBody, contentType, protocol);
+            exchange.getResponseHeaders().set("Content-Type", result.contentType);
+            exchange.sendResponseHeaders(200, result.body.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(result.body);
+            }
+        } catch (Exception e) {
+            respond(exchange, 500, "text/plain", rootMessage(e));
+        }
+    }
+
+    /**
+     * Answers a secured multipart request with a multipart of its own, keyed by the session key that request
+     * established and carrying no xenc:EncryptedKey. The correlated shape, which is the only one that makes a
+     * client resolve an attachment's key from what its own request conveyed.
+     *
+     * {@code ?protocol=soap12&signatt=true&sigalg=HMAC_SHA256}
+     */
+    private void handleAttachRespond(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            respond(exchange, 405, "text/plain", "method not allowed");
+            return;
+        }
+
+        Map<String, String> q = queryParams(exchange.getRequestURI());
+        ScenarioConfig config = configFrom(exchange.getRequestURI());
+        String protocol = q.getOrDefault("protocol", "soap12");
+
+        byte[] requestBody;
+        try (InputStream in = exchange.getRequestBody()) {
+            requestBody = in.readAllBytes();
+        }
+
+        String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+        if (contentType == null || contentType.isEmpty()) {
+            respond(exchange, 400, "text/plain", "missing Content-Type for multipart respond");
+            return;
+        }
+
+        try {
+            Attachments.EmitResult result = new AttachmentSecurity(crypto, config)
+                    .respondWithEstablishedKey(requestBody, contentType, protocol, STOREPASS);
             exchange.getResponseHeaders().set("Content-Type", result.contentType);
             exchange.sendResponseHeaders(200, result.body.length);
             try (OutputStream out = exchange.getResponseBody()) {

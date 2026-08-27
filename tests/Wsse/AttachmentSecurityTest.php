@@ -879,6 +879,93 @@ final class AttachmentSecurityTest extends InteropTestCase
         self::assertTrue($result['valid'], 'WSS4J refused the shared-key attachment: '.(string) ($result['error'] ?? ''));
     }
 
+    /**
+     * The correlated shape, and the one that actually makes an attachment's key be resolved from what our own
+     * request conveyed. Every other row here puts an xenc:EncryptedKey in the message we read, and the
+     * decryptor prefers a wrapped key over a named one, so the EncryptedKeySHA1 path was never taken inbound
+     * for an attachment.
+     *
+     * PHP establishes a session key and sends it with an attachment; the oracle unwraps it, answers with a
+     * multipart of its own keyed by that same key, and writes no xenc:EncryptedKey back. The answer is only
+     * openable by the exchange that made the request, which is what the key scoping exists for.
+     */
+    public function test_php_decrypts_an_attachment_a_wss4j_response_keyed_by_our_own_request(): void
+    {
+        $payload = $this->ramp(4096);
+
+        $storage = new AttachmentStorage();
+        $storage->requestAttachments()->add(new Attachment(
+            '<'.self::CID.'>',
+            'file',
+            'invoice.pdf',
+            'application/pdf',
+            $this->stream($payload),
+        ));
+
+        // One exchange, both directions, exactly as the middleware hands it over.
+        $keys = new ExchangeKeys();
+        $request = Document::fromXmlString(self::envelope(AttachmentType::Swa));
+        $outbound = new WsseContext(
+            $request,
+            self::soapVersionFor(AttachmentType::Swa),
+            new SecurityProfile(crypto: new CryptoPolicy(
+                acceptedSignatureMethods: [SignatureMethod::HMAC_SHA256],
+            )),
+            $keys,
+        );
+
+        $sessionKey = new Keys\GeneratedSessionKey($this->recipientCertificate(), EncKeyRef::Thumbprint);
+        (new Outbound\Timestamp(300))($outbound);
+        (new Outbound\Signature(new Signing\Symmetric($sessionKey)))
+            ->withSignatureMethod(SignatureMethod::HMAC_SHA256)
+            ->withParts([Part::body(), Part::timestamp()])($outbound);
+        (new Outbound\Encryption($sessionKey))->withParts([Part::body()])($outbound);
+
+        $packed = $this->pack($request->toXmlString(), $storage);
+        $answer = Oracle::postRaw(
+            '/attach/respond?protocol='.self::protocolFor(AttachmentType::Swa)
+            .'&signatt=true&sigalg=HMAC_SHA256&enccover=Content&signcover=Content',
+            (string) $packed->getBody(),
+            $packed->getHeaderLine('Content-Type'),
+        );
+        self::assertSame(200, $answer['status'], 'oracle /attach/respond failed: '.$answer['body']);
+
+        $responseFactory = Psr17FactoryDiscovery::findResponseFactory();
+        $streamFactory = Psr17FactoryDiscovery::findStreamFactory();
+        $psrResponse = $responseFactory->createResponse(200)
+            ->withHeader('Content-Type', $answer['contentType'])
+            ->withBody($streamFactory->createStream($answer['body']));
+
+        $inboundStorage = new AttachmentStorage();
+        $split = (ResponseBuilder::default())($psrResponse, $inboundStorage, AttachmentType::Swa);
+        $response = Document::fromXmlString((string) $split->getBody());
+
+        // Nothing wrapped travelled back: the answer names the key the request established.
+        self::assertStringNotContainsString('EncryptedKey>', $response->toXmlString());
+        self::assertNotSame(
+            hash('sha256', $payload),
+            hash('sha256', $this->onlyAttachment($inboundStorage)->content->rewind()->getContents()),
+        );
+
+        (new Inbound\Decrypt(useEstablishedKey: true))
+            ->withAttachments(AttachmentParts::response($inboundStorage, ExternalPartCoverage::Content))(
+                new WsseContext(
+                    $response,
+                    self::soapVersionFor(AttachmentType::Swa),
+                    new SecurityProfile(crypto: new CryptoPolicy(
+                        acceptedSignatureMethods: [SignatureMethod::HMAC_SHA256],
+                    )),
+                    $keys,
+                ),
+            );
+
+        self::assertSame(
+            hash('sha256', $payload),
+            hash('sha256', $this->onlyAttachment($inboundStorage)->content->rewind()->getContents()),
+            'PHP must recover the bytes WSS4J encrypted under the key our request established',
+        );
+    }
+
     /** Packs a SOAP part plus the storage's request attachments into a multipart request. */
     private function pack(
         string $soapXml,
