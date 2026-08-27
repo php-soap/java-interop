@@ -197,8 +197,8 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
 
         // The same exchange keys the request used, which is what the middleware hands both directions.
         $inbound = $this->context($response, $keys);
-        (Inbound\Decrypt::fromEstablishedKeys())($inbound);
-        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($inbound);
+        (new Inbound\Decrypt(useEstablishedKey: true))($inbound);
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()], useEstablishedKey: true))($inbound);
 
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
     }
@@ -215,8 +215,8 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         $response = $this->wss4jResponseTo($this->establishedRequest($keys), derivedKeys: true);
 
         $inbound = $this->context($response, $keys);
-        (Inbound\Decrypt::fromEstablishedKeys())($inbound);
-        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($inbound);
+        (new Inbound\Decrypt(useEstablishedKey: true))($inbound);
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()], useEstablishedKey: true))($inbound);
 
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
         self::assertStringContainsString('DerivedKeyToken', $response->toXmlString());
@@ -241,8 +241,8 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         self::assertStringNotContainsString(WsSecureConversationVersion::V2005_12->value, $response->toXmlString());
 
         $inbound = $this->context($response, $keys);
-        (Inbound\Decrypt::fromEstablishedKeys())($inbound);
-        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($inbound);
+        (new Inbound\Decrypt(useEstablishedKey: true))($inbound);
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()], useEstablishedKey: true))($inbound);
 
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $response->toXmlString());
     }
@@ -254,7 +254,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         $response = $this->wss4jResponseTo($this->establishedRequest(new ExchangeKeys()));
 
         $this->expectException(SecurityFault::class);
-        (Inbound\Decrypt::fromEstablishedKeys())($this->context($response, new ExchangeKeys()));
+        (new Inbound\Decrypt(useEstablishedKey: true))($this->context($response, new ExchangeKeys()));
     }
 
     /** A request that establishes a session key in the given exchange, as a real one would. */
@@ -326,7 +326,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         self::assertStringContainsString(self::PLAINTEXT_MARKER, $document->toXmlString());
 
         $this->expectException(SecurityFault::class);
-        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()]))($context);
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body()], useEstablishedKey: true))($context);
     }
 
     /**
@@ -356,7 +356,7 @@ final class SymmetricBindingPhpInteropTest extends InteropTestCase
         // WSS4J accepts it, and so does this package: the same bytes, read by both.
         self::assertTrue($this->verify($document->toXmlString())['valid']);
 
-        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body(), Part::timestamp()]))(
+        (new Inbound\VerifySignature($this->trustStore(), signed: [Part::body(), Part::timestamp()], useEstablishedKey: true))(
             $this->context($document, $keys),
         );
     }
