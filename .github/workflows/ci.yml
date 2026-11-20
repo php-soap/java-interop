@@ -1,6 +1,6 @@
 name: ci
 
-# The harness's own self-test, on PHP 8.4 and 8.5. The committed composer.json declares no repositories, so
+# The harness's own self-test, on PHP 8.4, 8.5 and 8.6. The committed composer.json declares no repositories, so
 # this resolves the middlewares from Packagist: the WSSE one from its active development branch, v4.x, rather
 # than from the stale default branch. It turns green once the middleware changes the harness exercises have
 # landed there.
@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.4', '8.5']
+        php: ['8.4', '8.5', '8.6']
     name: PHP ${{ matrix.php }}
     steps:
       - name: Checkout harness
